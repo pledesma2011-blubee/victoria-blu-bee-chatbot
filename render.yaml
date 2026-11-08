@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: victoria-blu-bee
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: WHATSAPP_VERIFY_TOKEN
+        value: victoria-blu-bee
+      - key: PETER_WHATSAPP
+        value: "524421447169"
+      - key: PETER_EMAIL
+        value: pledesma@blubeetech.com.mx
+      - key: PORT
+        value: "10000"
