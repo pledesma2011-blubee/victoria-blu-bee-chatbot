@@ -7,7 +7,7 @@ const path = require('path');
 const config = require('./config');
 
 const GRAPH = `https://graph.facebook.com/${config.graphVersion}`;
-const MEDIA_IDS_FILE = path.join(__dirname, 'state', 'media-ids.json');
+const MEDIA_IDS_FILE = path.join(config.stateDir, 'media-ids.json');
 
 function loadMediaIds() {
   try {

@@ -8,8 +8,8 @@ const { execFile } = require('child_process');
 const config = require('./config');
 const wa = require('./whatsapp');
 
-const STATE_DIR = path.join(__dirname, 'state');
-const LEADS_FILE = path.join(__dirname, 'state', 'leads.json');
+const STATE_DIR = config.stateDir;
+const LEADS_FILE = path.join(config.stateDir, 'leads.json');
 
 // ---------- utilidades ----------
 
@@ -209,7 +209,7 @@ async function handleMessage(msg) {
   } else if (msg.type === 'audio' || msg.type === 'voice') {
     // Nota de voz: descargarla y transcribirla
     try {
-      const tmp = path.join(__dirname, 'state', `audio-${Date.now()}.ogg`);
+      const tmp = path.join(config.stateDir, `audio-${Date.now()}.ogg`);
       await wa.downloadMedia(msg.audio.id, tmp);
       const transcribed = await transcribeAudio(tmp);
       fs.unlink(tmp, () => {});

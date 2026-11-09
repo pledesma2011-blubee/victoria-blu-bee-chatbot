@@ -4,6 +4,7 @@
 // Ver README.md para la lista completa.
 
 require('dotenv').config();
+const path = require('path');
 
 const config = {
   // WhatsApp Cloud API (Meta)
@@ -36,6 +37,11 @@ const config = {
     logoVideo: process.env.MEDIA_LOGO || './media/logo-video.mp4',
     closingAudio: process.env.MEDIA_CLOSING_AUDIO || './media/cierre-oficial.ogg',
   },
+
+  // Estado (conversaciones y recados): carpeta con permisos de escritura.
+  // En local es ./state. En hosting con archivos de solo lectura (p. ej. FadeHost),
+  // pon STATE_DIR=/data/state para que el estado sobreviva a los despliegues.
+  stateDir: process.env.STATE_DIR || path.join(__dirname, 'state'),
 
   // Servidor
   port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
