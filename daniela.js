@@ -34,6 +34,16 @@ function normalize(text) {
     .trim();
 }
 
+// Comparar números por los últimos 10 dígitos: Meta manda el remitente
+// mexicano con el "1" de móvil (5214421447169) pero el número configurado
+// es 52... (524421447169). Sin esto el comando de reinicio nunca reconoce
+// a Pedro aunque escriba la frase exacta.
+function sameNumber(a, b) {
+  const da = String(a || '').replace(/\D/g, '').slice(-10);
+  const db = String(b || '').replace(/\D/g, '').slice(-10);
+  return da.length === 10 && da === db;
+}
+
 function contains(text, words) {
   const t = ` ${normalize(text)} `;
   return words.some((w) => t.includes(` ${normalize(w)} `) || t.includes(normalize(w)));
@@ -729,8 +739,12 @@ async function handleMessage(msg) {
   // Comando de reinicio SOLO para Pedro (probar a Daniela repetidamente).
   // Si Pedro quedó en handedOff tras tocar "Hablar con Pedro", con esto
   // vuelve a empezar desde cero. Nadie más puede usarlo: solo responde
-  // al número personal de Peter y al texto exacto "reiniciar daniela".
-  if (from === config.peterWhatsApp && norm === 'reiniciar daniela') {
+  // al número personal de Peter. El texto es tolerante: basta con que
+  // contenga "reiniciar" o "reinicia" JUNTO con "daniela", en cualquier
+  // orden y con palabras extra ("Reiniciar a Daniela", "reinicia daniela
+  // por favor", ...). Un "reiniciar" sin "daniela" NO reinicia.
+  const isResetCommand = /\breinici(ar|a)\b/.test(norm) && /\bdaniela\b/.test(norm);
+  if (sameNumber(from, config.peterWhatsApp) && isResetCommand) {
     try {
       fs.unlinkSync(path.join(STATE_DIR, `${from}.json`));
     } catch { /* no había estado guardado */ }
