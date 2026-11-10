@@ -3,6 +3,14 @@
 // Diseño v2 (2026-11-10, aprobado por Peter): conversación humana, sin menús.
 // Flujo: saludo con video → nombre+empresa → cómo dirigirse → datos de
 // contacto (correo, teléfono, llamada/WhatsApp) → pregunta abierta → intención.
+// Límites v2.1 (2026-11-10, aprobado por Peter): obscenidades, pruebas de IA
+// ("¿eres un robot?") y preguntas generales fuera del negocio: una
+// redirección amable y, si insisten, silencio + aviso a Pedro.
+// Regla de anonimato del CEO (2026-11-10, aprobada por Peter): Daniela NUNCA
+// dice "Pedro" a un extraño; el traspaso es a "la persona indicada" o "el
+// área correspondiente". Solo si el contacto preguntó por "Pedro Ledesma"
+// por su nombre se puede decir "Sr. Ledesma". Los avisos a Peter (internos)
+// siguen con todos los datos.
 // Ver chatbot-whatsapp-blu-bee-diseno.md para el diseño completo.
 
 const fs = require('fs');
@@ -56,6 +64,9 @@ function loadState(phone) {
     needsContact: false, // faltan datos de contacto por capturar
     pendingNeed: null, // intención expresada antes de terminar la captura de datos
     need: null, // resumen corto de lo que necesita (para el resumen y el aviso)
+    obsceneCount: 0, // mensajes obscenos/acoso en esta conversación (límite: 1 respuesta, luego silencio)
+    probeCount: 0, // preguntas "¿eres una IA/robot?" en esta conversación
+    offtopicCount: 0, // preguntas generales fuera del negocio en esta conversación
     known: false,
     handedOff: false,
   };
@@ -341,6 +352,169 @@ function looksLikeScam(text) {
   return SCAM_PATTERNS.some((p) => t.includes(normalize(p)));
 }
 
+// ---------- límites: mensajes fuera del negocio ----------
+// Capa v2.1 (2026-11-10, aprobada por Peter). Tres categorías, en este orden:
+// 1) obscenidades/acoso/contenido sexual; 2) "¿eres una IA/robot/persona?"
+// y pruebas de chatbot; 3) preguntas generales fuera del negocio.
+// Regla por categoría: la primera vez responde (redirección) y avisa a
+// Pedro; si insiste (segundo mensaje de esa naturaleza en la misma
+// conversación), deja de contestar y solo avisa a Pedro. Cada caso avisa.
+
+// Textos de redirección (los dos primeros, verbatim, aprobados por Peter).
+const LIMIT_OBSCENE = 'En Blü Bee atendemos consultas sobre nuestras soluciones. ¿En qué le puedo ayudar con eso?';
+const LIMIT_IDENTITY = 'Soy Daniela, la asistente virtual de Blü Bee Technologies. Estoy para ayudarle con información sobre nuestras soluciones, agendar una demostración o pasar su mensaje a la persona indicada.';
+const LIMIT_GENERAL = 'En Blü Bee le puedo ayudar con información sobre nuestras soluciones, agendar una demostración o pasar su mensaje a la persona indicada. ¿En qué le puedo ayudar?';
+
+// Groserías, insultos y contenido sexual (español, uso en México/LatAm).
+// Se comparan por palabra completa sobre el texto normalizado (sin acentos),
+// así "pena" no activa "pene" ni "Vergara" activa "verga".
+const OBSCENE_WORDS = [
+  'mierda', 'carajo', 'joder', 'jodido', 'jodida', 'jodiendo', 'jodan',
+  'coño', 'puta', 'puto', 'cabron', 'cabrona', 'chingar', 'chingada',
+  'chingado', 'chingados', 'chingando', 'chingadera', 'chinguen',
+  'pendejo', 'pendeja', 'pendejada', 'verga', 'culero', 'culera',
+  'ojete', 'mamon', 'mamona', 'mamando', 'pinche', 'idiota', 'imbecil',
+  'estupido', 'estupida', 'tarado', 'tarada', 'culo', 'cagada', 'cagar',
+  'perra', 'zorra', 'pene', 'vagina', 'tetas', 'chichis', 'follar', 'follando',
+  'coger', 'cogiendo', 'masturbar', 'orgasmo', 'porno', 'pornografia',
+  'desnudo', 'desnuda', 'mamada', 'coito', 'sexo', 'sexual', 'picha', 'polla',
+  'fuck', 'shit', 'bitch', 'dick', 'pussy',
+];
+
+const OBSCENE_PHRASES = [
+  'hijo de puta', 'hija de puta', 'puta madre', 'vete a la mierda',
+  'a la mierda', 'que te jodan', 'chinga tu madre', 'chinga a tu madre',
+  'me cago en', 'vete al carajo', 'al carajo', 'me vale verga',
+  'me vale madre', 'me vale madres', 'sexo oral', 'sexo contigo',
+  'acostarnos', 'a la cama', 'vamos a la cama', 'cogemos', 'follamos',
+  // Acoso / coqueteo hacia Daniela: nunca se sigue, nunca se coquetea.
+  // ("te quiero" NO va aquí: "te quiero pedir una demo" es negocio.)
+  'me gustas', 'eres guapa', 'eres hermosa', 'que guapa', 'que hermosa',
+  'te amo', 'quiero conocerte', 'estas soltera', 'tienes novio',
+  'mandame tu foto', 'mandame una foto', 'foto tuya',
+  'te invito a salir', 'que bonita eres', 'eres bonita', 'estas muy guapa',
+  'que guapa eres', 'estas hermosa', 'me encantas', 'dame tu numero personal',
+  'tu numero personal', 'enseñame tu cuerpo', 'manda foto de tus',
+];
+
+// "¿Eres una IA / un robot / una persona?" y pruebas de chatbot.
+const IDENTITY_PATTERNS = [
+  'eres una ia', 'eres un robot', 'eres una robot', 'eres un bot', 'eres una bot',
+  'eres real', 'eres persona', 'eres humana', 'eres humano', 'quien te programo',
+  'quien te creo', 'quien te hizo', 'quien te diseño', 'demuestrame que eres inteligente',
+  'demuestra que eres inteligente', 'prueba que eres inteligente',
+  'eres inteligencia artificial', 'eres una maquina', 'no eres real',
+  'eres de verdad', 'pareces un robot', 'hablas como un robot', 'eres un programa',
+  'eres chatgpt', 'eres siri', 'eres alexa', 'eres google', 'que ia eres',
+  'que modelo eres', 'quien te entreno', 'eres un asistente virtual',
+  'eres asistente virtual',
+];
+
+// Tareas generales de IA y preguntas fuera del negocio (clima, deportes,
+// chistes, trivia, noticias). "cuanto es" y "que opinas de" solo cuentan si
+// el mensaje NO es de negocio (ver el guardia de BUSINESS_WORDS).
+const GENERAL_PATTERNS = [
+  'hazme un poema', 'escribe un poema', 'escribeme un poema', 'haz un poema',
+  'escribe un chiste', 'cuentame un chiste', 'cuenta un chiste', 'hazme un chiste',
+  'dime un chiste', 'que clima hace', 'como esta el clima', 'clima de hoy',
+  'que tiempo hace', 'va a llover', 'cuentame una historia', 'escribe una historia',
+  'haz mi tarea', 'hazme la tarea', 'resuelve este problema', 'traduce esto',
+  'traduce al ingles', 'que hora es', 'que dia es hoy', 'que fecha es hoy',
+  'quien gano el partido', 'resultado del partido', 'que opinas de', 'que piensas de',
+  'recomiendame una pelicula', 'recomiendame una cancion', 'recomiendame un libro',
+  'canta una cancion', 'canta algo', 'dime una adivinanza', 'dime un dato curioso',
+  'dame un dato curioso', 'cual es el sentido de la vida', 'que es la vida',
+  'dime las noticias', 'que noticias hay', 'ultimas noticias', 'noticias de hoy',
+  'como va el america', 'como va el chivas', 'quien va ganando', 'resultado de chivas',
+  'gano el real madrid', 'partido de hoy', 'redacta un', 'escribe un correo',
+  'haz un resumen de', 'cuanto es', 'que significa la vida',
+];
+const GENERAL_WORDS = ['poema', 'chiste', 'trivia', 'adivinanza'];
+
+// Si el mensaje es claramente de negocio, NO es fuera de tema (así "¿a qué
+// hora es la demo?" no se confunde con "¿qué hora es?" y "¿qué opinas del
+// IoT para hoteles?" no se confunde con una pregunta general).
+const BUSINESS_WORDS = [
+  'blu bee', 'blubee', 'iot', 'demo', 'demostracion', 'precio', 'costo',
+  'cotizacion', 'propuesta', 'hotel', 'hospital', 'vinedo', 'industria',
+  'sector', 'soluciones', 'pedro', 'soporte', 'instalacion', 'beacon',
+  'plataforma', 'monitoreo', 'localizacion', 'sensores', 'empresa', 'negocio',
+  'cita', 'reunion', 'recado', 'mensaje',
+];
+
+// Comparación por palabra/frase completa sobre texto normalizado.
+function matchesAny(text, phrases) {
+  const t = ` ${normalize(text)} `;
+  return phrases.some((p) => t.includes(` ${p} `));
+}
+
+function looksObscene(text) {
+  return matchesAny(text, OBSCENE_WORDS) || matchesAny(text, OBSCENE_PHRASES);
+}
+
+function looksIdentityProbe(text) {
+  return matchesAny(text, IDENTITY_PATTERNS);
+}
+
+function looksGeneralTask(text) {
+  const t = normalize(text);
+  if (BUSINESS_WORDS.some((w) => ` ${t} `.includes(` ${w} `))) return false;
+  return matchesAny(text, GENERAL_PATTERNS) || matchesAny(text, GENERAL_WORDS);
+}
+
+// Revisa los límites para un mensaje. Se llama DESPUÉS del filtro de estafa
+// y del comando de reinicio de Pedro, y ANTES del flujo normal, así aplica
+// en TODAS las etapas (también mientras espera nombre/empresa/contacto: un
+// mensaje obsceno ahí no se toma como dato ni como nombre). Devuelve true si
+// el mensaje quedó resuelto por un límite (el flujo normal no debe seguir).
+async function checkLimits(st, text) {
+  const from = st.phone;
+
+  // 1) Obscenidades, acoso o contenido sexual.
+  if (looksObscene(text)) {
+    st.obsceneCount = (st.obsceneCount || 0) + 1;
+    saveState(st);
+    const repeated = st.obsceneCount >= 2;
+    await notifyPeter(
+      'Límite: mensaje fuera de lugar',
+      `Mensaje fuera de lugar de ${st.name || from} (${from}):\n"${text}"\n\n${repeated ? 'Daniela ya no contestó (segundo mensaje de esa naturaleza en la misma conversación).' : 'Daniela le respondió una vez con una redirección amable.'}`,
+      st
+    );
+    if (!repeated) await wa.sendText(from, LIMIT_OBSCENE);
+    return true;
+  }
+
+  // 2) "¿Eres una IA / un robot / una persona?" y pruebas de chatbot.
+  if (looksIdentityProbe(text)) {
+    st.probeCount = (st.probeCount || 0) + 1;
+    saveState(st);
+    const repeated = st.probeCount >= 2;
+    await notifyPeter(
+      'Pregunta sobre Daniela',
+      `Pregunta sobre si Daniela es una IA o una persona, de ${st.name || from} (${from}):\n"${text}"\n\n${repeated ? 'Daniela ya no contestó (insiste en probar al bot).' : 'Daniela respondió que es la asistente virtual de Blü Bee Technologies.'}`,
+      st
+    );
+    if (!repeated) await wa.sendText(from, LIMIT_IDENTITY);
+    return true;
+  }
+
+  // 3) Preguntas generales fuera del negocio.
+  if (looksGeneralTask(text)) {
+    st.offtopicCount = (st.offtopicCount || 0) + 1;
+    saveState(st);
+    const repeated = st.offtopicCount >= 2;
+    await notifyPeter(
+      'Pregunta fuera del negocio',
+      `Pregunta general fuera del negocio, de ${st.name || from} (${from}):\n"${text}"\n\n${repeated ? 'Daniela ya no contestó (insiste con preguntas fuera del negocio).' : 'Daniela redirigió a sus funciones.'}`,
+      st
+    );
+    if (!repeated) await wa.sendText(from, LIMIT_GENERAL);
+    return true;
+  }
+
+  return false;
+}
+
 // ---------- avisos a Pedro ----------
 
 let mailer = null;
@@ -408,7 +582,7 @@ const CIERRE = 'Ha sido un gusto atenderle. En Blü Bee quedamos a sus órdenes.
 const FAQ = {
   iot: 'El Internet de las Cosas (IoT) es conectar el mundo físico con inteligencia digital: saber lo que pasa en tu negocio y convertirlo en información útil en tiempo real.',
   quehace: 'En Blü Bee creamos soluciones de IoT a la medida de cada caso en específico. Cada empresa tiene necesidades distintas y diseñamos la solución para ese caso.',
-  precio: 'Los precios son cotizaciones personalizadas según tu caso. Te tomo tus datos y Pedro te prepara una propuesta.',
+  precio: 'Los precios son cotizaciones personalizadas según tu caso. Te tomo tus datos y el área correspondiente te prepara una propuesta.',
   donde: 'Estamos en Querétaro, México, y atendemos a todo el país.',
   soporte: 'Sí, damos instalación y soporte local en español.',
 };
@@ -441,7 +615,7 @@ async function closeChat(st) {
   if (st.need) dataLines.push(`• Necesidad: ${st.need}`);
   if (dataLines.length > 0) {
     try {
-      await wa.sendText(st.phone, `Antes de despedirme, le confirmo lo que le paso a Pedro:\n${dataLines.join('\n')}\n• WhatsApp: ${st.phone}`);
+      await wa.sendText(st.phone, `Antes de despedirme, le confirmo lo que le paso al área correspondiente:\n${dataLines.join('\n')}\n• WhatsApp: ${st.phone}`);
     } catch (e) {
       console.error('Error mandando el resumen:', e.message);
     }
@@ -465,6 +639,9 @@ async function closeChat(st) {
   } catch (e) {
     console.error('Error mandando el video del logo:', e.message);
   }
+  st.obsceneCount = 0;
+  st.probeCount = 0;
+  st.offtopicCount = 0;
   st.stage = 'closed';
   saveState(st);
 }
@@ -587,6 +764,12 @@ async function handleMessage(msg) {
     );
     return; // No contesta
   }
+
+  // Límites: mensajes fuera del negocio (obscenidades, pruebas de IA,
+  // preguntas generales). Van después del filtro de estafa y del comando de
+  // reinicio de Pedro, y antes del flujo normal, así aplican en TODAS las
+  // etapas (también mientras espera nombre/empresa/contacto).
+  if (await checkLimits(st, text)) return;
 
   // --- Primera vez: video de bienvenida + pedir nombre y empresa ---
   if (st.stage === 'new') {
@@ -749,7 +932,7 @@ async function handleMessage(msg) {
     const display = st.preferredName || st.name;
     await wa.sendText(
       from,
-      `Listo${display ? `, ${display}` : ''}. Ya le pasé sus datos a Pedro, él le confirma la demostración en cuanto pueda.`
+      `Listo${display ? `, ${display}` : ''}. Ya le pasé sus datos al área correspondiente, le confirman la demostración en cuanto puedan.`
     );
     await closeChat(st);
     return;
@@ -769,8 +952,8 @@ async function handleMessage(msg) {
     saveState(st);
     const display = st.preferredName || st.name;
     await wa.sendText(from, display
-      ? `Gracias, ${display}. ¿Qué mensaje le dejo a Pedro para su propuesta?`
-      : '¿Qué mensaje le dejo a Pedro para su propuesta?');
+      ? `Gracias, ${display}. ¿Qué mensaje le dejo a la persona indicada para su propuesta?`
+      : '¿Qué mensaje le dejo a la persona indicada para su propuesta?');
     return;
   }
 
@@ -792,7 +975,7 @@ async function handleMessage(msg) {
       `Nuevo recado de ${st.name || '(sin nombre)'} (${from}):\n"${text}"`,
       st
     );
-    await wa.sendText(from, 'Ya le pasé su mensaje a Pedro, él le responde en cuanto pueda.');
+    await wa.sendText(from, 'Ya le pasé su mensaje al área correspondiente, le responden en cuanto puedan.');
     await closeChat(st);
     return;
   }
@@ -806,9 +989,9 @@ async function handleMessage(msg) {
         await wa.sendVideo(from, config.media.commercialVideo);
       } catch (e) {
         console.error('Error mandando el comercial:', e.message);
-        await wa.sendText(from, 'Perdón, no pude mandar el video ahorita. Le paso su recado a Pedro para que se lo comparta.');
+        await wa.sendText(from, 'Perdón, no pude mandar el video ahorita. Le paso su recado a la persona indicada para que se lo comparta.');
       }
-      await wa.sendText(from, '¿Le gustaría que Pedro le prepare una propuesta o agendar una demostración?');
+      await wa.sendText(from, '¿Le gustaría que el área correspondiente le prepare una propuesta o agendar una demostración?');
     } else {
       st.stage = 'main';
       saveState(st);
@@ -848,12 +1031,15 @@ async function handleMainIntent(msg, st, text, norm) {
     }
 
     case 'pedro': {
-      // Formal si pregunta por "Pedro Ledesma"
+      // Regla (2026-11-10, aprobada por Peter): Daniela NUNCA dice "Pedro"
+      // a un extraño. Solo si el contacto preguntó por "Pedro Ledesma" POR
+      // SU NOMBRE (ya lo conoce) se puede decir "Sr. Ledesma". Si solo
+      // dijeron "Pedro" sin apellido, o no lo mencionaron: "la persona indicada".
       const formal = contains(text, ['pedro ledesma']);
       await wa.sendText(from, formal
         ? 'Yo le paso su recado al Sr. Ledesma.'
-        : 'Claro, te paso con Pedro. Te va a atender personalmente.');
-      st.need = 'Hablar con Pedro';
+        : 'Claro, le paso su mensaje a la persona indicada, le atiende en cuanto pueda.');
+      st.need = 'Hablar con la persona indicada';
       st.handedOff = true;
       st.stage = 'handed_off';
       saveState(st);
@@ -883,11 +1069,11 @@ async function handleMainIntent(msg, st, text, norm) {
     }
 
     case 'pedro_message': {
-      // Pregunta por "Pedro" (ya lo conoce) -> tomar recado
-      st.need = 'Recado para Pedro';
+      // Pregunta por "Pedro" (ya lo conoce) -> tomar recado (sin decir su nombre).
+      st.need = 'Recado para la persona indicada';
       st.stage = 'taking_message';
       saveState(st);
-      await wa.sendText(from, 'Claro. ¿Qué mensaje le dejo a Pedro?');
+      await wa.sendText(from, 'Claro. ¿Qué mensaje le dejo a la persona indicada?');
       return;
     }
 
@@ -896,7 +1082,7 @@ async function handleMainIntent(msg, st, text, norm) {
       st.need = 'Recado (proveedor)';
       st.stage = 'taking_message';
       saveState(st);
-      await wa.sendText(from, 'Con gusto le tomo su mensaje y se lo paso a Pedro. ¿Qué le quiere decir?');
+      await wa.sendText(from, 'Con gusto le tomo su mensaje y se lo paso a la persona indicada. ¿Qué le quiere decir?');
       return;
     }
 
@@ -907,12 +1093,12 @@ async function handleMainIntent(msg, st, text, norm) {
         st.needsContact = true;
         st.stage = 'price_capture';
         saveState(st);
-        await wa.sendText(from, '¿Me puede decir su nombre y su empresa para que Pedro le prepare su propuesta?');
+        await wa.sendText(from, '¿Me puede decir su nombre y su empresa para que el área correspondiente le prepare su propuesta?');
         return;
       }
       st.stage = 'taking_message';
       saveState(st);
-      await wa.sendText(from, `Gracias, ${display}. ¿Qué mensaje le dejo a Pedro para su propuesta?`);
+      await wa.sendText(from, `Gracias, ${display}. ¿Qué mensaje le dejo a la persona indicada para su propuesta?`);
       return;
     }
 
@@ -963,4 +1149,7 @@ module.exports = {
   parseAddressPref,
   parseContact,
   detectIntent,
+  looksObscene,
+  looksIdentityProbe,
+  looksGeneralTask,
 };
