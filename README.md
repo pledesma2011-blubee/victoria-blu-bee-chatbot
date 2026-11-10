@@ -1,8 +1,8 @@
-# Victoria — chatbot de WhatsApp de Blü Bee Technologies
+# Daniela — chatbot de WhatsApp de Blü Bee Technologies
 
 ## Qué es
 
-Victoria es la secretaria virtual de Blü Bee Technologies en WhatsApp Business
+Daniela es la secretaria virtual de Blü Bee Technologies en WhatsApp Business
 (442 461 0323). Recibe a quien escribe con un video de bienvenida, pregunta su
 nombre y qué necesita, toma recados, agenda demostraciones y le pasa todo a Pedro.
 Solo da información de la empresa cuando se la piden. Nunca habla de hardware.
@@ -13,7 +13,7 @@ El diseño completo está en `chatbot-whatsapp-blu-bee-diseno.md`.
 ## Archivos
 
 - `server.js` — servidor webhook (Express). Recibe los mensajes de WhatsApp.
-- `victoria.js` — la lógica de conversación de Victoria (estados, intenciones,
+- `daniela.js` — la lógica de conversación de Daniela (estados, intenciones,
   recados, seguridad, cierres).
 - `whatsapp.js` — cliente de la API de WhatsApp Cloud (enviar texto, video,
   audio, botones; subir medios).
@@ -29,11 +29,11 @@ El diseño completo está en `chatbot-whatsapp-blu-bee-diseno.md`.
 
 | Uso | Archivo |
 |---|---|
-| Video de bienvenida | `../victoria-saludo-final.mp4` (10 s, vertical) |
-| Saludo personalizado con nombre | `../victoria-saludo-personalizado-plantilla.mp4` (8.2 s) — solo cuando Pedro lo autoriza |
+| Video de bienvenida | `../daniela-saludo-final.mp4` (10 s, vertical) |
+| Saludo personalizado con nombre | `../daniela-saludo-personalizado-plantilla.mp4` (8.2 s) — solo cuando Pedro lo autoriza |
 | Comercial (solo si lo piden) | `../blu-bee-anuncio-musica4-epic-v3-ligero.mp4` (58 s) |
 | Video del logotipo (cierre) | `media/logo-video.mp4` (8 s) |
-| Cierre en voz | `media/cierre-oficial.ogg` (se genera aparte con la voz de Victoria) |
+| Cierre en voz | `media/cierre-oficial.ogg` (se genera aparte con la voz de Daniela) |
 
 ## Instalación
 
@@ -62,7 +62,7 @@ SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=
 SMTP_PASS=
-SMTP_FROM=Victoria <victoria@blubeetech.com.mx>
+SMTP_FROM=Daniela <daniela@blubeetech.com.mx>
 
 # Transcripción de notas de voz (opcional)
 TRANSCRIBE_CMD=python3 transcribe.py
@@ -88,7 +88,7 @@ node test-local.js
 ```
 
 Simula una conversación completa (bienvenida, nombre, información, video,
-demo, recado, cierre) sin llamar a la API de WhatsApp: imprime lo que Victoria
+demo, recado, cierre) sin llamar a la API de WhatsApp: imprime lo que Daniela
 mandaría. Sirve para revisar la lógica antes de conectar el número real.
 
 ## Notas
@@ -100,5 +100,5 @@ mandaría. Sirve para revisar la lógica antes de conectar el número real.
   WhatsApp a Pedro.
 - Para desconectar el bot: borrar el webhook en Meta o apagar el servidor.
   El número, los chats y los contactos quedan intactos.
-- Victoria no contesta mensajes que no son de Blü Bee ni mensajes sospechosos
+- Daniela no contesta mensajes que no son de Blü Bee ni mensajes sospechosos
   (estafa/extorsión): solo avisa a Pedro.

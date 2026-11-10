@@ -1,4 +1,4 @@
-// Configuración de Victoria — chatbot de WhatsApp de Blü Bee Technologies
+// Configuración de Daniela — chatbot de WhatsApp de Blü Bee Technologies
 // Los secretos (tokens, contraseñas) NUNCA van en este archivo.
 // Se leen de variables de entorno o del archivo .env (que no se comparte).
 // Ver README.md para la lista completa.
@@ -23,7 +23,7 @@ const config = {
   smtpPort: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 587,
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
-  smtpFrom: process.env.SMTP_FROM || 'Victoria <victoria@blubeetech.com.mx>',
+  smtpFrom: process.env.SMTP_FROM || 'Daniela <daniela@blubeetech.com.mx>',
 
   // Transcripción de notas de voz: comando que recibe la ruta del audio y devuelve el texto.
   // Por defecto usa el helper transcribe.py con faster-whisper (ver README).

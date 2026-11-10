@@ -1,6 +1,6 @@
 // Cliente de la API de WhatsApp Cloud (Meta Graph API).
 // Envía textos, videos, audios y botones; sube medios y los reutiliza por ID.
-// No contiene lógica de conversación: eso vive en victoria.js.
+// No contiene lógica de conversación: eso vive en daniela.js.
 
 const fs = require('fs');
 const path = require('path');

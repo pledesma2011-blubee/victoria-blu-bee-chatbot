@@ -1,9 +1,9 @@
-// Servidor webhook de Victoria — chatbot de WhatsApp de Blü Bee Technologies.
-// Recibe los mensajes de WhatsApp Cloud API y se los pasa a victoria.js.
+// Servidor webhook de Daniela — chatbot de WhatsApp de Blü Bee Technologies.
+// Recibe los mensajes de WhatsApp Cloud API y se los pasa a daniela.js.
 
 const express = require('express');
 const config = require('./config');
-const { handleMessage } = require('./victoria');
+const { handleMessage } = require('./daniela');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -51,10 +51,10 @@ app.post('/webhook', async (req, res) => {
 });
 
 // Salud del servidor
-app.get('/health', (req, res) => res.json({ ok: true, bot: 'Victoria', empresa: 'Blü Bee Technologies' }));
+app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: 'Blü Bee Technologies' }));
 
 app.listen(config.port, () => {
-  console.log(`Victoria escuchando en el puerto ${config.port}`);
+  console.log(`Daniela escuchando en el puerto ${config.port}`);
   console.log(`Webhook: http://localhost:${config.port}/webhook`);
   if (!config.accessToken || !config.phoneNumberId) {
     console.log('⚠️  Falta WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID en .env — el bot no puede mandar mensajes todavía.');

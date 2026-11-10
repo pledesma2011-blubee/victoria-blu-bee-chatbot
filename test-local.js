@@ -1,8 +1,8 @@
-// Prueba local de Victoria SIN llamar a la API de WhatsApp.
-// Simula una conversación completa e imprime lo que Victoria mandaría.
+// Prueba local de Daniela SIN llamar a la API de WhatsApp.
+// Simula una conversación completa e imprime lo que Daniela mandaría.
 // Uso: node test-local.js
 
-// Parchear el cliente de WhatsApp ANTES de cargar victoria.js
+// Parchear el cliente de WhatsApp ANTES de cargar daniela.js
 const wa = require('./whatsapp');
 const sent = [];
 wa.sendText = async (to, text) => {
@@ -24,7 +24,7 @@ wa.sendButtons = async (to, text, buttons) => {
 wa.markRead = async () => null;
 wa.downloadMedia = async () => { throw new Error('sin medios en modo local'); };
 
-const { handleMessage } = require('./victoria');
+const { handleMessage } = require('./daniela');
 const fs = require('fs');
 const path = require('path');
 
