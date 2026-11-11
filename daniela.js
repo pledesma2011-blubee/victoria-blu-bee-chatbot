@@ -652,6 +652,28 @@ function vipSafeParsedName(from, name) {
   return name;
 }
 
+// ¿Es este nombre el nombre del bot ("Daniela" o "Dani")? El nombre del bot
+// NUNCA es el nombre del contacto. Puede quedar guardado en el estado por
+// un bug viejo de extracción (caso real 2026-11-10: a Ana se le guardó
+// "Daniela" como nombre y Daniela le contestó "Mucho gusto, Daniela soy";
+// la extracción ya ignora "Daniela", pero el estado viejo sigue ahí).
+// La comparación es normalizada (minúsculas, sin acentos).
+function isBotName(name) {
+  const n = normalize(name || '');
+  return n === 'daniela' || n === 'dani';
+}
+
+// Nombre para dirigirse al contacto: preferredName o name, pero NUNCA el
+// nombre del bot. Si el guardado es "Daniela"/"Dani" (estado viejo), se
+// trata como si no hubiera nombre y se devuelve '' (o el otro nombre si es
+// válido). Evita saludos confusos como "Hola, Daniela, soy Daniela...".
+function contactDisplayName(st) {
+  if (!st) return '';
+  if (st.preferredName && !isBotName(st.preferredName)) return st.preferredName;
+  if (st.name && !isBotName(st.name)) return st.name;
+  return '';
+}
+
 // ¿Trae el mensaje un cariño o piropo dirigido a Daniela? Para Ricky no es
 // límite: "hola mi amor", "eres hermosa", "me gustas", "te amo", "qué guapa
 // eres"... (términos de AFFECTIONATE_TERMS o frases de EXPLICIT_FLIRT_PHRASES).
@@ -1753,7 +1775,7 @@ async function handleMessage(msg) {
     maybeRequestFarewellVideo(st); // prospecto: preparar el video de despedida (nombre, empresa o genérico)
     st.stage = 'demo_when';
     saveState(st);
-    const display = st.preferredName || st.name;
+    const display = contactDisplayName(st);
     await wa.sendText(from, display
       ? `Gracias, ${display}. ¿Qué día y hora ${st.formality === 'tu' ? 'te' : 'le'} conviene para la demostración?`
       : 'Gracias. ¿Qué día y hora le conviene para la demostración?');
@@ -1779,7 +1801,7 @@ async function handleMessage(msg) {
       `Nueva solicitud de demostración:\n• Día y hora: ${when}\n\nConfírmale la cita, por favor.`,
       st
     );
-    const display = st.preferredName || st.name;
+    const display = contactDisplayName(st);
     await wa.sendText(
       from,
       `Listo${display ? `, ${display}` : ''}. Ya le pasé sus datos al área correspondiente, le confirman la demostración en cuanto puedan.`
@@ -1805,7 +1827,7 @@ async function handleMessage(msg) {
     maybeRequestFarewellVideo(st); // prospecto: preparar el video de despedida (nombre, empresa o genérico)
     st.stage = 'taking_message';
     saveState(st);
-    const display = st.preferredName || st.name;
+    const display = contactDisplayName(st);
     await wa.sendText(from, display
       ? `Gracias, ${display}. ¿Qué mensaje le dejo a la persona indicada para su propuesta?`
       : '¿Qué mensaje le dejo a la persona indicada para su propuesta?');
@@ -1872,7 +1894,7 @@ async function handleMessage(msg) {
 
 async function handleMainIntent(msg, st, text, norm) {
   const from = st.phone;
-  const display = st.preferredName || st.name || '';
+  const display = contactDisplayName(st);
   const nameSuffix = display ? `, ${display}` : '';
   const leTe = st.formality === 'tu' ? 'te' : 'le';
   const intent = detectIntent(text, norm);
@@ -2084,9 +2106,11 @@ async function handleMainIntent(msg, st, text, norm) {
         return;
       }
       // Saludo por nombre si ya lo conoce (por perfil o por conversación).
+      // Nunca el nombre del bot: si el perfil es "Daniela"/"Dani" no se usa.
       let greetName = display;
       if (!greetName && msg.profileName && looksLikeName(msg.profileName)) {
-        greetName = capitalizeName(msg.profileName);
+        const prof = capitalizeName(msg.profileName);
+        if (!isBotName(prof)) greetName = prof;
       }
       await wa.sendText(from, greetName
         ? `Hola, ${greetName}, soy Daniela, la asistente de Blü Bee Technologies. ¿En qué ${leTe} puedo ayudar?`
@@ -2117,6 +2141,9 @@ module.exports = {
   isVipRicky,
   isVipForbiddenName,
   vipSafeParsedName,
+  // El nombre del bot nunca es el nombre del contacto (saludo confuso)
+  isBotName,
+  contactDisplayName,
   isVipAffectionate,
   looksGenuinelyObscene,
   vipPersonalLine,

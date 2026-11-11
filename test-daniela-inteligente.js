@@ -1037,6 +1037,79 @@ function cleanupVideos() {
     config.groqApiKey = '';
     config.openaiApiKey = '';
 
+    // ---------- (m) El nombre del bot nunca es el nombre del contacto
+    // Caso real 2026-11-11: Ana le escribió "Hola" a Daniela y Daniela le
+    // contestó "Hola, Daniela, soy Daniela, la asistente de Blü Bee
+    // Technologies. ¿En qué le puedo ayudar?" La causa: el estado guardado
+    // de Ana traía name="Daniela" (bug de extracción del 2026-11-10, cuando
+    // "hola Daniela soy Ana" le guardó "Daniela" como nombre) y el saludo
+    // por nombre lo insertaba tal cual. El saludo debe tratar "Daniela" /
+    // "Dani" como si no hubiera nombre (ver contactDisplayName).
+    console.log('\n(m) El nombre del bot nunca es el nombre del contacto:');
+    check('isBotName("Daniela") = true', daniela.isBotName('Daniela') === true);
+    check('isBotName("Dani") = true', daniela.isBotName('Dani') === true);
+    check('isBotName("dAnIeLa") = true (sin importar mayúsculas)', daniela.isBotName('dAnIeLa') === true);
+    check('isBotName("Ana") = false', daniela.isBotName('Ana') === false);
+    check('isBotName("") = false', daniela.isBotName('') === false);
+    check('contactDisplayName ignora name="Daniela"', daniela.contactDisplayName({ name: 'Daniela' }) === '');
+    check('contactDisplayName ignora preferredName="Daniela" y usa name', daniela.contactDisplayName({ preferredName: 'Daniela', name: 'Ana' }) === 'Ana');
+    check('contactDisplayName ignora ambos si son el bot', daniela.contactDisplayName({ preferredName: 'Dani', name: 'Daniela' }) === '');
+    check('contactDisplayName usa un nombre válido', daniela.contactDisplayName({ preferredName: 'Mari', name: 'María' }) === 'Mari');
+
+    // (m-a) Contacto que vuelve con nombre guardado "Daniela" dice "Hola".
+    const STALE = '521111000016';
+    await driveToMain(STALE, 'Soy Ana de la empresa La Esquina');
+    // Simula el estado viejo en vivo (bug del 2026-11-10): el contacto solo
+    // se conoce como "Daniela" (nombre y preferredName). Ambos se sobre-
+    // escriben: driveToMain deja preferredName="Ana" y hay que taparlo.
+    const staleFile = path.join(tmpDir, `${STALE}.json`);
+    const staleSt = JSON.parse(fs.readFileSync(staleFile, 'utf8'));
+    staleSt.name = 'Daniela';
+    staleSt.preferredName = 'Daniela';
+    fs.writeFileSync(staleFile, JSON.stringify(staleSt, null, 2));
+    mark = sent.length;
+    await incoming(STALE, 'Hola');
+    m = since(mark, STALE);
+    console.log('    (nombre guardado "Daniela", dice "Hola"):');
+    check('saludo limpio: "Hola, soy Daniela, la asistente..."', hasText(m, /Hola, soy Daniela, la asistente de Blü Bee Technologies\. ¿En qué le puedo ayudar\?/));
+    check('NO duplica el nombre ("Hola, Daniela, soy Daniela")', !hasText(m, /Hola, Daniela, soy Daniela/));
+    check('NO dice "Mucho gusto, Daniela"', !hasText(m, /Mucho gusto, Daniela/));
+
+    // (m-b) preferredName "Daniela" se ignora y se usa el name válido ("Ana").
+    const STALE2 = '521111000017';
+    await driveToMain(STALE2, 'Soy Ana de la empresa La Esquina');
+    const staleFile2 = path.join(tmpDir, `${STALE2}.json`);
+    const staleSt2 = JSON.parse(fs.readFileSync(staleFile2, 'utf8'));
+    staleSt2.preferredName = 'Daniela';
+    fs.writeFileSync(staleFile2, JSON.stringify(staleSt2, null, 2));
+    mark = sent.length;
+    await incoming(STALE2, 'Hola');
+    m = since(mark, STALE2);
+    console.log('    (preferredName "Daniela", name "Ana", dice "Hola"):');
+    check('saludo por el name válido: "Hola, Ana, soy Daniela..."', hasText(m, /Hola, Ana, soy Daniela, la asistente de Blü Bee Technologies\. ¿En qué le puedo ayudar\?/));
+    check('NO duplica el nombre', !hasText(m, /Hola, Daniela, soy Daniela/));
+
+    // (m-c) Control: nombre válido "Ana" sí se usa en el saludo por nombre.
+    const OKNAME = '521111000018';
+    await driveToMain(OKNAME, 'Soy Ana de la empresa La Esquina');
+    mark = sent.length;
+    await incoming(OKNAME, 'Hola');
+    m = since(mark, OKNAME);
+    console.log('    (nombre guardado "Ana", dice "Hola"):');
+    check('saludo por nombre: "Hola, Ana, soy Daniela..."', hasText(m, /Hola, Ana, soy Daniela, la asistente de Blü Bee Technologies\. ¿En qué le puedo ayudar\?/));
+
+    // (m-d) Perfil de WhatsApp "Daniela" no se usa como nombre del contacto.
+    const PROF = '521111000019';
+    fs.writeFileSync(path.join(tmpDir, `${PROF}.json`), JSON.stringify({
+      phone: PROF, stage: 'main', name: null, preferredName: null, formality: 'usted',
+    }, null, 2));
+    mark = sent.length;
+    await daniela.handleMessage({ from: PROF, type: 'text', text: { body: 'Hola' }, profileName: 'Daniela' });
+    m = since(mark, PROF);
+    console.log('    (perfil de WhatsApp "Daniela", dice "Hola"):');
+    check('saludo limpio (sin duplicar)', hasText(m, /Hola, soy Daniela, la asistente de Blü Bee Technologies\. ¿En qué le puedo ayudar\?/));
+    check('NO duplica el nombre', !hasText(m, /Hola, Daniela, soy Daniela/));
+
     // ---------- Sin botones en todo el flujo inteligente
     const buttons = sent.filter((s) => s.kind === 'buttons');
     console.log('\n(verificación global):');
