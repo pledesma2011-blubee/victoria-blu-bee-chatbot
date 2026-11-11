@@ -52,7 +52,9 @@ app.post('/webhook', async (req, res) => {
 
 // Entrega diferida del video de despedida personalizado (escenario B, v3).
 // El proceso que genera el video llama a este endpoint cuando el video ya
-// está listo en media/despedida-<nombre>.mp4, con el teléfono en el cuerpo:
+// está listo en media/ (despedida-<nombre>.mp4, despedida-<empresa>.mp4 o
+// despedida-generica.mp4, según la identidad de la solicitud), con el
+// teléfono en el cuerpo:
 //   POST /deliver-farewell  { "phone": "521234567890" }
 // Si hay una entrega pendiente para ese teléfono y el video ya existe, lo
 // envía junto con los enlaces de las redes y limpia el pendiente.

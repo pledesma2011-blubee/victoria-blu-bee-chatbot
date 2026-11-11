@@ -113,7 +113,8 @@ function loadState(phone) {
     personalTopic: false, // el tema NO es de Blü Bee (personal u otro negocio): se canaliza a Pedro
     personalGreeted: false, // ya se respondió cálidamente al saludo casual a Pedro
     farewellVideoRequested: false, // ya se pidió el video de despedida en esta conversación
-    farewellPending: null, // { name, requestedAt } si la despedida se hizo sin video (entrega diferida)
+    farewellIdentity: null, // { kind: 'person'|'company'|'generic', name } usada en la solicitud (v3.3)
+    farewellPending: null, // { kind, name, file, requestedAt } si la despedida se hizo sin video (entrega diferida)
     known: false,
     handedOff: false,
   };
@@ -732,13 +733,45 @@ for (const [key, sector] of Object.entries(SECTORS)) SECTOR_INFO[key] = sector.p
 // El bot solo (1) PIDE el video en segundo plano cuando detecta un prospecto
 // con nombre, y (2) lo ENTREGA en la despedida si ya está listo, o lo deja
 // pendiente para entrega diferida si aún no está.
+//
+// Fallback de identidad (v3.3, 2026-11-11, aprobado por Peter): el video
+// usa el NOMBRE DE LA PERSONA si existe; si no, el NOMBRE DE LA EMPRESA;
+// si no hay ninguno, el video GENÉRICO sin nombre. Daniela NUNCA insiste
+// por el nombre si la persona no lo quiere dar: usa lo que le dieron.
 
 const FAREWELL_SCRIPT = '[Nombre], muchas gracias por contactarnos. A la brevedad nos pondremos en contacto contigo. Te recuerdo que los servicios de Blü Bee no solo son de IoT, podemos resolver más temas. Síguenos en nuestras redes: YouTube, Instagram, Facebook y en nuestra página web. Muchas gracias.';
+
+// Guion genérico (sin nombre): el mismo guion institucional, sin el
+// "[Nombre], " inicial y con mayúscula inicial (el guion original trae
+// "muchas" en minúscula porque va tras el nombre). Se deriva del guion
+// para que nunca se desfasen.
+const FAREWELL_SCRIPT_GENERIC = FAREWELL_SCRIPT.replace('[Nombre], ', '').replace(/^./, (c) => c.toUpperCase());
+
+// Identidad para la despedida: nombre de la persona si existe; si no,
+// nombre de la empresa; si no hay ninguno, caso genérico (sin nombre).
+function farewellIdentity(st) {
+  if (st.name) return { kind: 'person', name: st.name };
+  if (st.company) return { kind: 'company', name: st.company };
+  return { kind: 'generic', name: null };
+}
 
 // El guion con el nombre sustituido (lo único que cambia es el nombre).
 function farewellPhrase(name) {
   return FAREWELL_SCRIPT.replace('[Nombre]', name);
 }
+
+// El guion para una identidad de despedida: persona o empresa usan su
+// nombre; el caso genérico usa el guion sin nombre (mismo texto, sin
+// "[Nombre], " al inicio).
+function farewellPhraseForIdentity(identity) {
+  if (!identity || !identity.name) return FAREWELL_SCRIPT_GENERIC;
+  return farewellPhrase(identity.name);
+}
+
+// El slug del nombre se corta a 40 caracteres: una empresa con nombre muy
+// largo usa una forma corta razonable en el archivo, pero el guion del
+// video lleva el nombre completo.
+const FAREWELL_SLUG_MAX = 40;
 
 // Nombre de archivo predecible del video de despedida personalizado.
 function farewellVideoFileName(name) {
@@ -747,14 +780,30 @@ function farewellVideoFileName(name) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/^-+|-+$/g, '')
+    .slice(0, FAREWELL_SLUG_MAX)
+    .replace(/-+$/g, '');
   return slug ? `despedida-${slug}.mp4` : null;
+}
+
+// Nombre de archivo para una identidad de despedida: persona o empresa
+// usan su nombre normalizado; el caso genérico usa un solo archivo común.
+function farewellVideoFileNameForIdentity(identity) {
+  if (!identity || identity.kind === 'generic' || !identity.name) {
+    return 'despedida-generica.mp4';
+  }
+  return farewellVideoFileName(identity.name) || 'despedida-generica.mp4';
 }
 
 function farewellVideoPath(name) {
   const file = farewellVideoFileName(name);
   if (!file) return null;
   return path.join(__dirname, 'media', file);
+}
+
+// Ruta del video para una identidad de despedida.
+function farewellVideoPathForIdentity(identity) {
+  return path.join(__dirname, 'media', farewellVideoFileNameForIdentity(identity));
 }
 
 // Mensaje con los enlaces de redes que EXISTEN (los pendientes se agregan
@@ -772,18 +821,34 @@ function socialLinksMessage() {
 }
 
 // Pide el video de despedida en segundo plano. Registra la solicitud
-// (nombre + frase) en state/despedida-pendiente-<telefono>.json para que el
-// proceso que genera el video la tome, y si está configurado
+// (identidad + frase) en state/despedida-pendiente-<telefono>.json para que
+// el proceso que genera el video la tome, y si está configurado
 // FAREWELL_VIDEO_WEBHOOK hace un POST con los mismos datos (fire-and-forget).
 // NUNCA bloquea la conversación. Devuelve true si se registró la solicitud.
+// La identidad es la mejor disponible en ese momento (persona > empresa >
+// genérico). Si la identidad MEJORA después (p. ej. se pidió genérico y
+// luego la persona da su nombre), la solicitud se actualiza con la
+// identidad más específica; si no mejora, no se vuelve a pedir.
+const FAREWELL_SPECIFICITY = { generic: 0, company: 1, person: 2 };
 function requestFarewellVideo(st) {
-  if (!st.name || st.farewellVideoRequested) return false;
+  const identity = farewellIdentity(st);
+  if (st.farewellVideoRequested) {
+    const prev = st.farewellIdentity;
+    if (!prev || FAREWELL_SPECIFICITY[identity.kind] <= FAREWELL_SPECIFICITY[prev.kind]) {
+      return false;
+    }
+    // La identidad mejoró: se actualiza la solicitud (mismo archivo JSON,
+    // mismo webhook) con la identidad más específica.
+  }
   st.farewellVideoRequested = true;
+  st.farewellIdentity = identity;
   saveState(st);
   const request = {
     phone: st.phone,
-    name: st.name,
-    phrase: farewellPhrase(st.name),
+    kind: identity.kind, // 'person' | 'company' | 'generic'
+    name: identity.name, // nombre de la persona o de la empresa; null en genérico
+    file: farewellVideoFileNameForIdentity(identity),
+    phrase: farewellPhraseForIdentity(identity),
     fecha: new Date().toISOString(),
   };
   try {
@@ -807,13 +872,14 @@ function requestFarewellVideo(st) {
   return true;
 }
 
-// Dispara la preparación del video cuando Daniela ya tiene el nombre Y
-// detecta que es un prospecto real o cliente importante (pregunta por
-// servicios, pide información, muestra intención de compra/demo, o es
-// cliente que vuelve). NO se dispara para saludos casuales ni temas que
-// no son Blü Bee (eso lo decide quien llama a esta función).
+// Dispara la preparación del video cuando Daniela detecta que es un
+// prospecto real o cliente importante (pregunta por servicios, pide
+// información, muestra intención de compra/demo, o es cliente que vuelve).
+// La identidad (nombre de la persona, de la empresa o genérico) se resuelve
+// dentro de requestFarewellVideo con lo que haya en el estado. NO se dispara
+// para saludos casuales ni temas que no son Blü Bee (eso lo decide quien
+// llama a esta función).
 function maybeRequestFarewellVideo(st) {
-  if (!st.name) return false;
   return requestFarewellVideo(st);
 }
 
@@ -824,9 +890,16 @@ function maybeRequestFarewellVideo(st) {
 async function deliverPendingFarewell(phone) {
   const st = loadState(phone);
   if (!st.farewellPending) return { ok: false, reason: 'no-pending' };
-  const name = st.farewellPending.name || st.name;
-  const videoPath = farewellVideoPath(name);
-  if (!name || !videoPath || !fs.existsSync(videoPath)) {
+  // La identidad y el archivo quedan en el pendiente (lo que se pidió);
+  // si el pendiente es de una versión anterior (solo nombre), se resuelve
+  // con la identidad guardada o con lo que haya en el estado.
+  const pending = st.farewellPending;
+  const identity = pending.kind
+    ? { kind: pending.kind, name: pending.name || null }
+    : (st.farewellIdentity || farewellIdentity(st));
+  const file = pending.file || farewellVideoFileNameForIdentity(identity);
+  const videoPath = path.join(__dirname, 'media', file);
+  if (!fs.existsSync(videoPath)) {
     return { ok: false, reason: 'no-video' };
   }
   try {
@@ -889,7 +962,8 @@ async function closeChat(st) {
   // Escenario B (conversación corta, el video aún no está): se registra la
   // entrega pendiente (sin hacer esperar a la persona) y se entrega después
   // por el endpoint POST /deliver-farewell o el reintento best-effort.
-  const farewellPath = st.name ? farewellVideoPath(st.name) : null;
+  const identity = st.farewellIdentity || farewellIdentity(st);
+  const farewellPath = farewellVideoPathForIdentity(identity);
   if (farewellPath && fs.existsSync(farewellPath)) {
     try {
       await wa.sendVideo(st.phone, farewellPath);
@@ -899,9 +973,14 @@ async function closeChat(st) {
       console.error('Error mandando el video de despedida:', e.message);
     }
     st.farewellPending = null; // entregado (si había un pendiente, ya quedó)
-  } else if (st.farewellVideoRequested && st.name) {
+  } else if (st.farewellVideoRequested) {
     // El video se pidió pero aún no está listo: queda pendiente en silencio.
-    st.farewellPending = { name: st.name, requestedAt: new Date().toISOString() };
+    st.farewellPending = {
+      kind: identity.kind,
+      name: identity.name,
+      file: farewellVideoFileNameForIdentity(identity),
+      requestedAt: new Date().toISOString(),
+    };
     scheduleFarewellRetry(st.phone);
   }
   // Cierre oficial en nota de voz (audio pregrabado con la voz de Daniela)
@@ -927,6 +1006,7 @@ async function closeChat(st) {
   st.probeCount = 0;
   st.offtopicCount = 0;
   st.farewellVideoRequested = false; // la próxima conversación puede pedir otro
+  st.farewellIdentity = null; // la próxima conversación resuelve su identidad
   st.stage = 'closed';
   saveState(st);
 }
@@ -1458,7 +1538,7 @@ async function handleMessage(msg) {
       if (onlyCompany) st.company = onlyCompany;
     }
     st.needsContact = !(st.name && st.company);
-    maybeRequestFarewellVideo(st); // prospecto con nombre: preparar el video de despedida
+    maybeRequestFarewellVideo(st); // prospecto: preparar el video de despedida (nombre, empresa o genérico)
     st.stage = 'demo_when';
     saveState(st);
     const display = st.preferredName || st.name;
@@ -1506,7 +1586,7 @@ async function handleMessage(msg) {
       if (onlyCompany) st.company = onlyCompany;
     }
     st.needsContact = !(st.name && st.company);
-    maybeRequestFarewellVideo(st); // prospecto con nombre: preparar el video de despedida
+    maybeRequestFarewellVideo(st); // prospecto: preparar el video de despedida (nombre, empresa o genérico)
     st.stage = 'taking_message';
     saveState(st);
     const display = st.preferredName || st.name;
@@ -1806,10 +1886,14 @@ module.exports = {
   detectPersonal,
   handlePersonal,
   answerInfoQuestion,
-  // Video de despedida personalizado (v3)
+  // Video de despedida personalizado (v3; fallback de identidad v3.3)
+  farewellIdentity,
   farewellPhrase,
+  farewellPhraseForIdentity,
   farewellVideoFileName,
+  farewellVideoFileNameForIdentity,
   farewellVideoPath,
+  farewellVideoPathForIdentity,
   socialLinksMessage,
   requestFarewellVideo,
   maybeRequestFarewellVideo,

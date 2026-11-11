@@ -76,13 +76,15 @@ async function driveToMain(phone, intro) {
 
 // Videos de despedida de prueba (archivos vacíos en media/, se borran al final).
 const createdVideos = [];
-function makeFarewellVideo(name) {
-  const file = daniela.farewellVideoFileName(name);
+function makeFarewellVideoFile(file) {
   const full = path.join(__dirname, 'media', file);
   fs.mkdirSync(path.join(__dirname, 'media'), { recursive: true });
   fs.writeFileSync(full, 'video de prueba');
   createdVideos.push(full);
   return full;
+}
+function makeFarewellVideo(name) {
+  return makeFarewellVideoFile(daniela.farewellVideoFileName(name));
 }
 function cleanupVideos() {
   for (const f of createdVideos) {
@@ -539,6 +541,145 @@ function cleanupVideos() {
     check('NO se clasifica como "no es de Blü Bee"', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
     check('después pide la identidad de forma natural', hasText(m, /Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes\?/));
     check('etapa = awaiting_name_company', st && st.stage === 'awaiting_name_company', `stage=${st && st.stage}`);
+
+    // ---------- (j) Fallback de identidad del video de despedida (v3.3, 2026-11-11)
+    // Aprobado por Peter: persona > empresa > genérico. Daniela NUNCA
+    // insiste por el nombre: usa lo que le dieron.
+
+    // (j-a) Solo empresa (sin nombre de persona) -> video con la empresa.
+    const FJ1 = '521111000050';
+    await incoming(FJ1, 'Hola');
+    await incoming(FJ1, 'Quiero agendar una demo');
+    mark = sent.length;
+    await incoming(FJ1, 'Hotel Casa Blanca');
+    m = since(mark, FJ1);
+    st = readState(FJ1);
+    let reqJ = readFarewellRequest(FJ1);
+    console.log('\n(j-a) Solo empresa ("Hotel Casa Blanca", sin nombre):');
+    check('la empresa queda guardada', st && st.company === 'Hotel Casa Blanca', `company=${st && st.company}`);
+    check('NO hay nombre de persona', !st || !st.name, `name=${st && st.name}`);
+    check('se registra la solicitud de video', !!reqJ, `request=${reqJ ? 'sí' : 'no'}`);
+    check('la solicitud es tipo empresa', !!reqJ && reqJ.kind === 'company', `kind=${reqJ && reqJ.kind}`);
+    check('la solicitud trae la empresa', !!reqJ && reqJ.name === 'Hotel Casa Blanca', `name=${reqJ && reqJ.name}`);
+    check('la solicitud trae el archivo de la empresa', !!reqJ && reqJ.file === 'despedida-hotel-casa-blanca.mp4', `file=${reqJ && reqJ.file}`);
+    check('la frase usa la empresa', !!reqJ && /^Hotel Casa Blanca, muchas gracias por contactarnos/.test(reqJ.phrase || ''), reqJ && reqJ.phrase);
+    check('pregunta día/hora (no vuelve a pedir el nombre)', hasText(m, /¿Qué día y hora le conviene para la demostración\?/));
+    check('NO vuelve a pedir el nombre', !hasText(m, /nombre/i), JSON.stringify(texts(m)));
+    // Despedida sin video -> queda pendiente con la empresa.
+    await incoming(FJ1, 'mañana a las 10');
+    st = readState(FJ1);
+    console.log('    (despedida sin video listo):');
+    check('queda la entrega pendiente con la empresa', !!st && !!st.farewellPending && st.farewellPending.kind === 'company' && st.farewellPending.name === 'Hotel Casa Blanca', `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
+    check('el pendiente trae el archivo de la empresa', !!st && !!st.farewellPending && st.farewellPending.file === 'despedida-hotel-casa-blanca.mp4', `file=${st && st.farewellPending && st.farewellPending.file}`);
+    check('conversación cerrada', st && st.stage === 'closed', `stage=${st && st.stage}`);
+    // Entrega diferida con el video de la empresa.
+    makeFarewellVideo('Hotel Casa Blanca');
+    mark = sent.length;
+    const deliveredJ1 = await daniela.deliverPendingFarewell(FJ1);
+    m = since(mark, FJ1);
+    st = readState(FJ1);
+    console.log('    (entrega diferida con el video de la empresa):');
+    check('deliverPendingFarewell devuelve ok:true', deliveredJ1 && deliveredJ1.ok === true, JSON.stringify(deliveredJ1));
+    check('envía el video de la empresa', videoFiles(m).some((f) => /despedida-hotel-casa-blanca\.mp4$/.test(f)), JSON.stringify(videoFiles(m)));
+    check('envía los enlaces de redes', hasText(m, /Te comparto nuestras redes:/));
+    check('limpia el pendiente', !st || st.farewellPending === null, `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
+
+    // (j-b) Sin nombre ni empresa -> video genérico.
+    const FJ2 = '521111000051';
+    await incoming(FJ2, 'Hola');
+    await incoming(FJ2, 'Quiero agendar una demo');
+    mark = sent.length;
+    await incoming(FJ2, 'No quiero dar mis datos, solo quiero la demo');
+    m = since(mark, FJ2);
+    st = readState(FJ2);
+    reqJ = readFarewellRequest(FJ2);
+    console.log('\n(j-b) Sin nombre ni empresa ("No quiero dar mis datos"):');
+    check('NO hay nombre de persona', !st || !st.name, `name=${st && st.name}`);
+    check('NO hay empresa', !st || !st.company, `company=${st && st.company}`);
+    check('se registra la solicitud de video (genérica)', !!reqJ, `request=${reqJ ? 'sí' : 'no'}`);
+    check('la solicitud es tipo genérico', !!reqJ && reqJ.kind === 'generic', `kind=${reqJ && reqJ.kind}`);
+    check('la solicitud NO trae nombre', !!reqJ && reqJ.name === null, `name=${reqJ && reqJ.name}`);
+    check('la solicitud trae el archivo genérico', !!reqJ && reqJ.file === 'despedida-generica.mp4', `file=${reqJ && reqJ.file}`);
+    check('la frase genérica NO lleva nombre', !!reqJ && /^Muchas gracias por contactarnos\./.test(reqJ.phrase || ''), reqJ && reqJ.phrase);
+    check('la frase genérica es el guion sin "[Nombre], "', !!reqJ && reqJ.phrase === daniela.farewellPhrase('X').replace('X, muchas', 'Muchas'), reqJ && reqJ.phrase);
+    check('pregunta día/hora (no vuelve a pedir el nombre)', hasText(m, /¿Qué día y hora le conviene para la demostración\?/));
+    check('NO vuelve a pedir el nombre', !hasText(m, /nombre/i), JSON.stringify(texts(m)));
+    // Despedida sin video -> queda pendiente genérico.
+    await incoming(FJ2, 'mañana a las 11');
+    st = readState(FJ2);
+    console.log('    (despedida sin video listo):');
+    check('queda la entrega pendiente genérica', !!st && !!st.farewellPending && st.farewellPending.kind === 'generic' && st.farewellPending.name === null, `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
+    check('el pendiente trae el archivo genérico', !!st && !!st.farewellPending && st.farewellPending.file === 'despedida-generica.mp4', `file=${st && st.farewellPending && st.farewellPending.file}`);
+    // Entrega diferida con el video genérico.
+    makeFarewellVideoFile('despedida-generica.mp4');
+    mark = sent.length;
+    const deliveredJ2 = await daniela.deliverPendingFarewell(FJ2);
+    m = since(mark, FJ2);
+    st = readState(FJ2);
+    console.log('    (entrega diferida con el video genérico):');
+    check('deliverPendingFarewell devuelve ok:true', deliveredJ2 && deliveredJ2.ok === true, JSON.stringify(deliveredJ2));
+    check('envía el video genérico', videoFiles(m).some((f) => /despedida-generica\.mp4$/.test(f)), JSON.stringify(videoFiles(m)));
+    check('envía los enlaces de redes', hasText(m, /Te comparto nuestras redes:/));
+    check('limpia el pendiente', !st || st.farewellPending === null, `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
+
+    // (j-c) Escenario A con empresa: el video ya está listo al despedirse.
+    const FJ3 = '521111000052';
+    await incoming(FJ3, 'Hola');
+    await incoming(FJ3, 'Quiero agendar una demo');
+    await incoming(FJ3, 'Hotel Casa Blanca');
+    makeFarewellVideo('Hotel Casa Blanca');
+    mark = sent.length;
+    await incoming(FJ3, 'mañana a las 10');
+    m = since(mark, FJ3);
+    st = readState(FJ3);
+    console.log('\n(j-c) Despedida con video de empresa listo (escenario A):');
+    check('envía el video de la empresa', videoFiles(m).some((f) => /despedida-hotel-casa-blanca\.mp4$/.test(f)), JSON.stringify(videoFiles(m)));
+    check('después del video manda los enlaces de redes', hasText(m, /Te comparto nuestras redes:/));
+    check('NO queda pendiente', !st || st.farewellPending === null, `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
+    check('también hace el cierre oficial (audio)', hasKind(m, 'audio'));
+    check('conversación cerrada', st && st.stage === 'closed', `stage=${st && st.stage}`);
+
+    // (j-d) Funciones de identidad (unitarias).
+    console.log('\n(j-d) Funciones de identidad:');
+    check('farewellIdentity con nombre -> persona', JSON.stringify(daniela.farewellIdentity({ name: 'Ana', company: 'Hotel X' })) === JSON.stringify({ kind: 'person', name: 'Ana' }), JSON.stringify(daniela.farewellIdentity({ name: 'Ana', company: 'Hotel X' })));
+    check('farewellIdentity sin nombre, con empresa -> empresa', JSON.stringify(daniela.farewellIdentity({ name: null, company: 'Hotel Casa Blanca' })) === JSON.stringify({ kind: 'company', name: 'Hotel Casa Blanca' }));
+    check('farewellIdentity sin nombre ni empresa -> genérico', JSON.stringify(daniela.farewellIdentity({ name: null, company: null })) === JSON.stringify({ kind: 'generic', name: null }));
+    check('farewellPhraseForIdentity empresa usa la empresa', /^Hotel Casa Blanca, muchas gracias por contactarnos/.test(daniela.farewellPhraseForIdentity({ kind: 'company', name: 'Hotel Casa Blanca' })));
+    check('farewellPhraseForIdentity genérico NO lleva nombre', /^Muchas gracias por contactarnos\./.test(daniela.farewellPhraseForIdentity({ kind: 'generic', name: null })));
+    check('el guion genérico es el institucional sin el nombre', daniela.farewellPhraseForIdentity({ kind: 'generic', name: null }) === daniela.farewellPhrase('X').replace('X, muchas', 'Muchas'));
+    check('farewellVideoFileNameForIdentity persona', daniela.farewellVideoFileNameForIdentity({ kind: 'person', name: 'Ana' }) === 'despedida-ana.mp4', daniela.farewellVideoFileNameForIdentity({ kind: 'person', name: 'Ana' }));
+    check('farewellVideoFileNameForIdentity empresa', daniela.farewellVideoFileNameForIdentity({ kind: 'company', name: 'Hotel Casa Blanca' }) === 'despedida-hotel-casa-blanca.mp4', daniela.farewellVideoFileNameForIdentity({ kind: 'company', name: 'Hotel Casa Blanca' }));
+    check('farewellVideoFileNameForIdentity genérico', daniela.farewellVideoFileNameForIdentity({ kind: 'generic', name: null }) === 'despedida-generica.mp4', daniela.farewellVideoFileNameForIdentity({ kind: 'generic', name: null }));
+    check('farewellVideoPathForIdentity genérico apunta al archivo común', /despedida-generica\.mp4$/.test(daniela.farewellVideoPathForIdentity({ kind: 'generic', name: null })), daniela.farewellVideoPathForIdentity({ kind: 'generic', name: null }));
+    const longCompany = 'Grupo Industrial de Servicios de Logística del Bajío S.A. de C.V.';
+    const longFile = daniela.farewellVideoFileName(longCompany);
+    console.log('    (empresa con nombre muy largo):');
+    check('el archivo usa forma corta (slug ≤ 40 caracteres)', /^despedida-[a-z0-9-]{1,40}\.mp4$/.test(longFile) && !/-+\.mp4$/.test(longFile), longFile);
+    check('el guion lleva el nombre completo de la empresa', daniela.farewellPhraseForIdentity({ kind: 'company', name: longCompany }).startsWith(`${longCompany}, muchas gracias por contactarnos`));
+    check('farewellVideoFileName("") sigue siendo null', daniela.farewellVideoFileName('') === null);
+
+    // (j-e) La identidad mejora en la misma conversación: genérico -> persona.
+    // 'claro' llega a 'main' sin nombre (palabra de asentimiento); ahí una
+    // pregunta dispara la solicitud genérica, y al dar su nombre en la demo
+    // la solicitud se actualiza a persona.
+    const FJ4 = '521111000053';
+    await incoming(FJ4, 'Hola');
+    await incoming(FJ4, 'claro');
+    st = readState(FJ4);
+    console.log('\n(j-e) La identidad mejora (genérico -> persona):');
+    check('llega a main sin nombre', st && st.stage === 'main' && !st.name, `stage=${st && st.stage} name=${st && st.name}`);
+    await incoming(FJ4, '¿qué es un beacon?');
+    reqJ = readFarewellRequest(FJ4);
+    check('primero se pide genérico', !!reqJ && reqJ.kind === 'generic' && reqJ.file === 'despedida-generica.mp4', `kind=${reqJ && reqJ.kind} file=${reqJ && reqJ.file}`);
+    await incoming(FJ4, 'quiero agendar una demo');
+    await incoming(FJ4, 'Soy Laura Méndez de Hotel Casa Blanca');
+    reqJ = readFarewellRequest(FJ4);
+    check('al dar su nombre, la solicitud se actualiza a persona', !!reqJ && reqJ.kind === 'person' && reqJ.name === 'Laura Méndez', `kind=${reqJ && reqJ.kind} name=${reqJ && reqJ.name}`);
+    check('el archivo se actualiza al de la persona', !!reqJ && reqJ.file === 'despedida-laura-mendez.mp4', `file=${reqJ && reqJ.file}`);
+    check('la frase se actualiza con su nombre', !!reqJ && /^Laura Méndez, muchas gracias por contactarnos/.test(reqJ.phrase || ''));
+    await incoming(FJ4, 'mañana a las 10');
+    st = readState(FJ4);
+    check('el pendiente queda como persona', !!st && !!st.farewellPending && st.farewellPending.kind === 'person' && st.farewellPending.name === 'Laura Méndez', `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
 
     // ---------- Sin botones en todo el flujo inteligente
     const buttons = sent.filter((s) => s.kind === 'buttons');
