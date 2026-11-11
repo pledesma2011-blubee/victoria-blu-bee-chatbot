@@ -26,13 +26,38 @@ const path = require('path');
 const config = require('./config');
 
 function normalize(text) {
-  return (text || '')
+  return normalizeBrandVariants((text || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[¡!¿?.,;:()"]/g, ' ')
+    .replace(/[¡!¿?.,;:()"-]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim());
+}
+
+// Normalización de la marca (v3.2, 2026-11-11, caso real: Ricardo Roach
+// escribió "Que hace blue Bee ?" y Daniela lo clasificó como "que no es de
+// Blü Bee" y no contestó). La gente escribe la marca con errores de dedo
+// ("Blue Bee", "Bluebee", "Blu Be", "Blube"...). Todas las variantes se
+// normalizan a la forma canónica ("blu bee" / "blubee") ANTES de clasificar,
+// así la mención de la marca —en cualquier ortografía— SIEMPRE se trata
+// como una consulta sobre Blü Bee, nunca como "no es de Blü Bee". Principio
+// general de Peter: si hay duda, se asume que es sobre Blü Bee y se
+// responde con información.
+// Se aplica dentro de normalize(), así TODO el matching (base de
+// conocimiento, sectores, intenciones, límites) ve la forma canónica.
+// No se toca "blue" solo: es una palabra común en inglés y no es la marca.
+// El guion también se vuelve espacio ("Blu-Bee" -> "blu bee").
+function normalizeBrandVariants(text) {
+  return (text || '')
+    .replace(/\bblue bee technologies\b/g, 'blu bee technologies')
+    .replace(/\bbluebee technologies\b/g, 'blubee technologies')
+    .replace(/\bblue bee\b/g, 'blu bee')
+    .replace(/\bbluebee\b/g, 'blubee')
+    .replace(/\bblue be\b/g, 'blu bee')
+    .replace(/\bblu be\b/g, 'blu bee')
+    .replace(/\bblube\b/g, 'blubee')
+    .replace(/\bblueb\b/g, 'blubee');
 }
 
 // ¿Aparece el patrón (palabra o frase completa) en el texto normalizado?
@@ -172,6 +197,23 @@ const KNOWLEDGE = [
       'que es iot',
     ],
     answer: 'El Internet de las Cosas (IoT) es conectar el mundo físico con inteligencia digital: saber lo que pasa en su negocio y convertirlo en información útil en tiempo real. En Blü Bee creamos soluciones de IoT a la medida de cada caso: cada empresa, hotel, hospital o viñedo tiene necesidades distintas, y diseñamos la solución para ese caso.',
+    offerVideo: true,
+  },
+  {
+    id: 'quehace',
+    // Qué hace Blü Bee (v3.2, 2026-11-11, caso real: "Que hace blue Bee ?").
+    // Patrones SOLO con la marca, para no robar preguntas específicas:
+    // "¿qué hace un beacon?" sigue siendo de 'beacons', no de aquí.
+    // La normalización de la marca (normalizeBrandVariants) ya convirtió
+    // "blue Bee"/"Bluebee" en "blu bee"/"blubee" antes de buscar.
+    patterns: [
+      'que hace blu bee', 'que hace blubee', 'que hacen blu bee', 'que hacen blubee',
+      'que es blu bee', 'que es blubee',
+      'que hace blu bee technologies', 'que hace blubee technologies',
+      'a que se dedica blu bee', 'a que se dedica blubee',
+      'que ofrece blu bee', 'que ofrece blubee',
+    ],
+    answer: 'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Localizamos personas, activos y espacios con beacons, monitoreamos temperatura, humedad y CO2 con sensores, y lo convertimos todo en tableros, mapas y alertas en tiempo real. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.',
     offerVideo: true,
   },
   {
@@ -346,4 +388,5 @@ module.exports = {
   logUnanswered,
   readUnanswered,
   normalize,
+  normalizeBrandVariants,
 };

@@ -26,6 +26,16 @@
 // diminutivo o un cariño, no lo toma a mal y responde con calidez y
 // profesionalismo. El límite de acoso/coqueteo (v2.1) sigue para insistencia
 // o mensajes explícitamente inapropiados. Ver chatbot-whatsapp-blu-bee-diseno.md para el diseño completo.
+// Errores de dedo en la marca (v3.2, 2026-11-11, caso real: Ricardo Roach
+// escribió "Que hace blue Bee ?" y Daniela lo clasificó como "que no es de
+// Blü Bee" y no contestó): la marca se normaliza a su forma canónica
+// ("blu bee" / "blubee") dentro de normalize() (ver conocimiento.js), así
+// la mención de la marca —en cualquier ortografía— SIEMPRE se trata como
+// una consulta sobre Blü Bee, nunca como "no es de Blü Bee". Principio de
+// Peter: si hay duda, se asume que es sobre Blü Bee y se responde con
+// información. Las respuestas de Daniela escriben SIEMPRE la marca
+// correctamente ("Blü Bee" / "Blü Bee Technologies", con diéresis), aunque
+// la persona la haya escrito mal.
 
 const fs = require('fs');
 const path = require('path');
@@ -38,6 +48,7 @@ const {
   detectSector,
   detectNeed,
   logUnanswered,
+  normalizeBrandVariants,
 } = require('./conocimiento');
 
 const STATE_DIR = config.stateDir;
@@ -46,13 +57,13 @@ const LEADS_FILE = path.join(config.stateDir, 'leads.json');
 // ---------- utilidades ----------
 
 function normalize(text) {
-  return (text || '')
+  return normalizeBrandVariants((text || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[¡!¿?.,;:()"]/g, ' ')
+    .replace(/[¡!¿?.,;:()"-]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim());
 }
 
 // Comparar números por los últimos 10 dígitos: Meta manda el remitente
@@ -1789,6 +1800,8 @@ module.exports = {
   looksGeneralTask,
   // Diminutivos y cariños dirigidos a Daniela (v3.1)
   isAffectionateGreeting,
+  // Normalización de la marca / errores de dedo (v3.2)
+  normalizeBrandVariants,
   // Daniela inteligente (v3)
   detectPersonal,
   handlePersonal,

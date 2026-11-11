@@ -24,6 +24,7 @@ wa.markRead = async () => {};
 wa.downloadMedia = async () => null;
 
 const daniela = require('./daniela');
+const conocimiento = require('./conocimiento');
 const config = require('./config');
 const PETER = config.peterWhatsApp; // 524421447169
 
@@ -474,6 +475,70 @@ function cleanupVideos() {
     check('segunda vez: silencio (no contesta)', replies(m).length === 0, JSON.stringify(replies(m)));
     check('segunda vez: avisa a Pedro', peterNoticesSince(mark).length > 0);
     check('obsceneCount = 2', st && st.obsceneCount === 2, `obsceneCount=${st && st.obsceneCount}`);
+
+    // ---------- (i) Errores de dedo y faltas de ortografía de la marca (v3.2)
+    // Caso real: Ricardo Roach escribió "Que hace blue Bee ?" y Daniela lo
+    // clasificó como "que no es de Blü Bee" y no contestó. Principio de
+    // Peter: la mención de la marca, en cualquier ortografía, SIEMPRE se
+    // trata como una consulta sobre Blü Bee, nunca como "no es de Blü Bee".
+    console.log('\n(i) Errores de dedo en la marca:');
+    check('normalize("Que hace blue Bee ?") = "que hace blu bee"', conocimiento.normalize('Que hace blue Bee ?') === 'que hace blu bee', conocimiento.normalize('Que hace blue Bee ?'));
+    check('normalize("qué es Bluebee Technologies") = "que es blubee technologies"', conocimiento.normalize('qué es Bluebee Technologies') === 'que es blubee technologies', conocimiento.normalize('qué es Bluebee Technologies'));
+    check('normalize("Blu-Bee") = "blu bee"', conocimiento.normalize('Blu-Bee') === 'blu bee', conocimiento.normalize('Blu-Bee'));
+    check('normalize("que hace Blube?") = "que hace blubee"', conocimiento.normalize('que hace Blube?') === 'que hace blubee', conocimiento.normalize('que hace Blube?'));
+    check('findAnswer("Que hace blue Bee ?") = quehace', conocimiento.findAnswer('Que hace blue Bee ?') && conocimiento.findAnswer('Que hace blue Bee ?').id === 'quehace', JSON.stringify(conocimiento.findAnswer('Que hace blue Bee ?') && conocimiento.findAnswer('Que hace blue Bee ?').id));
+    check('findAnswer("qué es Bluebee Technologies") = quehace', conocimiento.findAnswer('qué es Bluebee Technologies') && conocimiento.findAnswer('qué es Bluebee Technologies').id === 'quehace');
+    check('findAnswer("¿qué es Blu Bee?") = quehace (sin diéresis)', conocimiento.findAnswer('¿qué es Blu Bee?') && conocimiento.findAnswer('¿qué es Blu Bee?').id === 'quehace');
+    check('findAnswer("¿qué hace un beacon?") NO es quehace (no roba lo específico)', !conocimiento.findAnswer('¿qué hace un beacon?') || conocimiento.findAnswer('¿qué hace un beacon?').id !== 'quehace', JSON.stringify(conocimiento.findAnswer('¿qué hace un beacon?') && conocimiento.findAnswer('¿qué hace un beacon?').id));
+
+    // (i-a) "Que hace blue Bee ?" en 'main' -> responde qué hace Blü Bee.
+    const MB1 = '521111000040';
+    await driveToMain(MB1, 'Soy María González de Hotel Casa Blanca');
+    mark = sent.length;
+    await incoming(MB1, 'Que hace blue Bee ?');
+    m = since(mark, MB1);
+    console.log('\n(i-a) "Que hace blue Bee ?" (en main):');
+    check('responde qué hace Blü Bee (base de conocimiento)', hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas \(IoT\)/));
+    check('la respuesta escribe "Blü Bee" correctamente', hasText(m, /Blü Bee/));
+    check('la respuesta NO repite la falta ("blue Bee")', !hasText(m, /blue bee/i));
+    check('NO se clasifica como "no es de Blü Bee" (sin aviso a Pedro)', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+
+    // (i-b) "qué es Bluebee Technologies" -> responde.
+    const MB2 = '521111000041';
+    await driveToMain(MB2, 'Soy Jorge Díaz de Plaza Central');
+    mark = sent.length;
+    await incoming(MB2, 'qué es Bluebee Technologies');
+    m = since(mark, MB2);
+    console.log('\n(i-b) "qué es Bluebee Technologies":');
+    check('responde qué hace Blü Bee (base de conocimiento)', hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas \(IoT\)/));
+    check('la respuesta escribe "Blü Bee" correctamente', hasText(m, /Blü Bee/));
+    check('NO se clasifica como "no es de Blü Bee"', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+
+    // (i-c) "Blu Bee" sin diéresis -> lo entiende.
+    const MB3 = '521111000042';
+    await driveToMain(MB3, 'Soy Ana Pérez de Clínica San José');
+    mark = sent.length;
+    await incoming(MB3, '¿qué es Blu Bee?');
+    m = since(mark, MB3);
+    console.log('\n(i-c) "¿qué es Blu Bee?" (sin diéresis):');
+    check('responde qué hace Blü Bee (base de conocimiento)', hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas \(IoT\)/));
+    check('NO se clasifica como "no es de Blü Bee"', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+
+    // (i-d) Primer mensaje (escenario Ricky): "Que hace blue Bee ?" como
+    // primer mensaje -> responde con la base y luego pide la identidad.
+    const MR = '521111000043';
+    mark = sent.length;
+    await incoming(MR, 'Que hace blue Bee ?');
+    m = since(mark, MR);
+    st = readState(MR);
+    console.log('\n(i-d) "Que hace blue Bee ?" como primer mensaje (escenario Ricky):');
+    check('manda el video de bienvenida', hasKind(m, 'video'));
+    check('responde qué hace Blü Bee (base de conocimiento)', hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas \(IoT\)/));
+    check('la respuesta escribe "Blü Bee" correctamente', hasText(m, /Blü Bee/));
+    check('la respuesta NO repite la falta ("blue Bee")', !hasText(m, /blue bee/i));
+    check('NO se clasifica como "no es de Blü Bee"', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+    check('después pide la identidad de forma natural', hasText(m, /Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes\?/));
+    check('etapa = awaiting_name_company', st && st.stage === 'awaiting_name_company', `stage=${st && st.stage}`);
 
     // ---------- Sin botones en todo el flujo inteligente
     const buttons = sent.filter((s) => s.kind === 'buttons');
