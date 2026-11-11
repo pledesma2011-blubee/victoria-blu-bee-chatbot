@@ -29,6 +29,37 @@ const config = {
   // Por defecto usa el helper transcribe.py con faster-whisper (ver README).
   transcribeCmd: process.env.TRANSCRIBE_CMD || 'python3 transcribe.py',
 
+  // Clave de OpenAI para transcribir notas de voz con la API de Whisper.
+  // Se lee de la variable de entorno OPENAI_API_KEY (o del .env).
+  // NUNCA se escribe en el código ni en los logs. Si no está configurada,
+  // Daniela pide amablemente que le escriban el mensaje (no intenta
+  // transcribir en local: en FadeHost no hay Python/ffmpeg).
+  openaiApiKey: process.env.OPENAI_API_KEY || '',
+
+  // Webhook opcional para pedir el video de despedida personalizado.
+  // Si está configurado, al detectar un prospecto se hace un POST con
+  // { phone, name, phrase, fecha }. Si no está configurado, la solicitud
+  // solo se registra en state/despedida-pendiente-<telefono>.json para que
+  // el proceso que genera el video la tome de ahí.
+  farewellVideoWebhook: process.env.FAREWELL_VIDEO_WEBHOOK || '',
+
+  // Token opcional para el endpoint POST /deliver-farewell (entrega diferida
+  // del video de despedida). Si está configurado, la petición debe incluirlo
+  // (campo "token" en el cuerpo o cabecera x-farewell-token). Si no está
+  // configurado, no se exige.
+  farewellEndpointToken: process.env.FAREWELL_ENDPOINT_TOKEN || '',
+
+  // Redes sociales de Blü Bee (para la despedida con el video de despedida).
+  // Solo se comparten los enlaces que existen; los pendientes se agregan aquí
+  // cuando estén listos y aparecerán automáticamente en el mensaje.
+  socialLinks: {
+    website: 'https://blubeetech.com.mx',
+    instagram: 'https://www.instagram.com/blubee_2026', // existe: @blubee_2026
+    facebook: '', // PENDIENTE: la página de Facebook se está construyendo
+    tiktok: '',   // PENDIENTE: Peter la crea en la app
+    youtube: '',  // PENDIENTE: el canal de YouTube se está construyendo
+  },
+
   // Archivos de medios (rutas relativas a la carpeta chatbot/)
   media: {
     welcomeVideo: process.env.MEDIA_WELCOME || './media/welcome-video.mp4',

@@ -11,13 +11,29 @@
 // área correspondiente". Solo si el contacto preguntó por "Pedro Ledesma"
 // por su nombre se puede decir "Sr. Ledesma". Los avisos a Peter (internos)
 // siguen con todos los datos.
-// Ver chatbot-whatsapp-blu-bee-diseno.md para el diseño completo.
+// "Daniela inteligente" v3 (2026-11-11, aprobado por Peter): consultora
+// ágil, no solo recepcionista. Base de conocimiento (conocimiento.js) para
+// responder preguntas de tecnología/IoT/servicios como experta; detección de
+// sector y respuestas adaptadas; flujo ágil intent-first (la necesidad manda,
+// la identidad se teje en la conversación); notas de voz con Whisper de
+// OpenAI; contactos personales / temas que no son Blü Bee se canalizan a
+// Pedro con calidez; aprendizaje (preguntas sin respuesta en
+// state/preguntas-sin-respuesta.json); video de despedida personalizado
+// (guion institucional fijo, solo cambia el nombre) con entrega inmediata
+// o diferida. Ver chatbot-whatsapp-blu-bee-diseno.md para el diseño completo.
 
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
 const config = require('./config');
 const wa = require('./whatsapp');
+const {
+  KNOWLEDGE,
+  SECTORS,
+  findAnswer,
+  detectSector,
+  detectNeed,
+  logUnanswered,
+} = require('./conocimiento');
 
 const STATE_DIR = config.stateDir;
 const LEADS_FILE = path.join(config.stateDir, 'leads.json');
@@ -77,6 +93,11 @@ function loadState(phone) {
     obsceneCount: 0, // mensajes obscenos/acoso en esta conversación (límite: 1 respuesta, luego silencio)
     probeCount: 0, // preguntas "¿eres una IA/robot?" en esta conversación
     offtopicCount: 0, // preguntas generales fuera del negocio en esta conversación
+    sector: null, // sector detectado (vinedo, hotel, hospital, ...) para adaptar la conversación
+    personalTopic: false, // el tema NO es de Blü Bee (personal u otro negocio): se canaliza a Pedro
+    personalGreeted: false, // ya se respondió cálidamente al saludo casual a Pedro
+    farewellVideoRequested: false, // ya se pidió el video de despedida en esta conversación
+    farewellPending: null, // { name, requestedAt } si la despedida se hizo sin video (entrega diferida)
     known: false,
     handedOff: false,
   };
@@ -597,15 +618,147 @@ const FAQ = {
   soporte: 'Sí, damos instalación y soporte local en español.',
 };
 
-const SECTOR_INFO = {
-  vinedo: 'En un viñedo, creamos una solución para que cada visitante viva su propia historia y se sienta especial, mientras tú sabes qué les gusta, dónde se quedan y qué compran.',
-  hotel: 'En un hotel, creamos una solución para entender cómo se mueven los huéspedes y optimizar la operación.',
-  hospital: 'En un hospital, creamos una solución para saber dónde está lo importante, en segundos, no en minutos.',
-  'centro comercial': 'En centros comerciales creamos soluciones que generan experiencias y valor real.',
-  industria: 'En la industria, creamos soluciones para tener control de tus procesos, operaciones y logística, con información en tiempo real.',
-  gobierno: 'Para dependencias de gobierno, creamos soluciones para conocer lo que pasa dentro de sus espacios y atender mejor a la gente.',
-  ciudad: 'Para ciudades inteligentes, creamos soluciones que conectan espacios, servicios y personas con información en tiempo real.',
-};
+// Respuestas por sector (desde conocimiento.js): empiezan con la frase
+// institucional del sector y añaden un ejemplo concreto. Se usan en
+// detectIntent (bucle de sectores) y en el caso 'sector' de handleMainIntent.
+const SECTOR_INFO = {};
+for (const [key, sector] of Object.entries(SECTORS)) SECTOR_INFO[key] = sector.pitch;
+
+// ---------- video de despedida personalizado (v3, 2026-11-11) ----------
+// UN SOLO guion institucional y fijo; lo único que cambia es el nombre.
+// Peter afinará el texto exacto después. El video NO se genera en el
+// servidor: se genera aparte y se coloca en media/ con el nombre predecible
+// despedida-<nombre-normalizado>.mp4 (ej. despedida-maria-gonzalez.mp4).
+// El bot solo (1) PIDE el video en segundo plano cuando detecta un prospecto
+// con nombre, y (2) lo ENTREGA en la despedida si ya está listo, o lo deja
+// pendiente para entrega diferida si aún no está.
+
+const FAREWELL_SCRIPT = '[Nombre], muchas gracias por contactarnos. A la brevedad nos pondremos en contacto contigo. Te recuerdo que los servicios de Blü Bee no solo son de IoT, podemos resolver más temas. Síguenos en nuestras redes: YouTube, Instagram, Facebook y en nuestra página web. Muchas gracias.';
+
+// El guion con el nombre sustituido (lo único que cambia es el nombre).
+function farewellPhrase(name) {
+  return FAREWELL_SCRIPT.replace('[Nombre]', name);
+}
+
+// Nombre de archivo predecible del video de despedida personalizado.
+function farewellVideoFileName(name) {
+  const slug = (name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug ? `despedida-${slug}.mp4` : null;
+}
+
+function farewellVideoPath(name) {
+  const file = farewellVideoFileName(name);
+  if (!file) return null;
+  return path.join(__dirname, 'media', file);
+}
+
+// Mensaje con los enlaces de redes que EXISTEN (los pendientes se agregan
+// en config.socialLinks cuando estén listos y aparecen automáticamente).
+function socialLinksMessage() {
+  const links = config.socialLinks || {};
+  const lines = [];
+  if (links.instagram) lines.push(`• Instagram: ${links.instagram}`);
+  if (links.facebook) lines.push(`• Facebook: ${links.facebook}`);
+  if (links.tiktok) lines.push(`• TikTok: ${links.tiktok}`);
+  if (links.youtube) lines.push(`• YouTube: ${links.youtube}`);
+  if (links.website) lines.push(`• Página web: ${links.website}`);
+  if (lines.length === 0) return '';
+  return `Te comparto nuestras redes:\n${lines.join('\n')}`;
+}
+
+// Pide el video de despedida en segundo plano. Registra la solicitud
+// (nombre + frase) en state/despedida-pendiente-<telefono>.json para que el
+// proceso que genera el video la tome, y si está configurado
+// FAREWELL_VIDEO_WEBHOOK hace un POST con los mismos datos (fire-and-forget).
+// NUNCA bloquea la conversación. Devuelve true si se registró la solicitud.
+function requestFarewellVideo(st) {
+  if (!st.name || st.farewellVideoRequested) return false;
+  st.farewellVideoRequested = true;
+  saveState(st);
+  const request = {
+    phone: st.phone,
+    name: st.name,
+    phrase: farewellPhrase(st.name),
+    fecha: new Date().toISOString(),
+  };
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(STATE_DIR, `despedida-pendiente-${st.phone}.json`),
+      JSON.stringify(request, null, 2)
+    );
+  } catch (e) {
+    console.error('No se pudo registrar la solicitud de video de despedida:', e.message);
+  }
+  if (config.farewellVideoWebhook) {
+    try {
+      fetch(config.farewellVideoWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      }).catch(() => {});
+    } catch { /* nunca bloquear la conversación */ }
+  }
+  return true;
+}
+
+// Dispara la preparación del video cuando Daniela ya tiene el nombre Y
+// detecta que es un prospecto real o cliente importante (pregunta por
+// servicios, pide información, muestra intención de compra/demo, o es
+// cliente que vuelve). NO se dispara para saludos casuales ni temas que
+// no son Blü Bee (eso lo decide quien llama a esta función).
+function maybeRequestFarewellVideo(st) {
+  if (!st.name) return false;
+  return requestFarewellVideo(st);
+}
+
+// Entrega diferida del video de despedida (escenario B): si hay una entrega
+// pendiente y el video ya existe en media/, lo envía junto con los enlaces
+// y limpia el pendiente. Lo usa el endpoint POST /deliver-farewell y el
+// temporizador best-effort. Devuelve { ok, reason? }.
+async function deliverPendingFarewell(phone) {
+  const st = loadState(phone);
+  if (!st.farewellPending) return { ok: false, reason: 'no-pending' };
+  const name = st.farewellPending.name || st.name;
+  const videoPath = farewellVideoPath(name);
+  if (!name || !videoPath || !fs.existsSync(videoPath)) {
+    return { ok: false, reason: 'no-video' };
+  }
+  try {
+    await wa.sendVideo(phone, videoPath);
+    const links = socialLinksMessage();
+    if (links) await wa.sendText(phone, links);
+  } catch (e) {
+    console.error('Error en la entrega diferida del video de despedida:', e.message);
+    return { ok: false, reason: 'send-error', error: e.message };
+  }
+  st.farewellPending = null;
+  saveState(st);
+  return { ok: true };
+}
+
+// Reintento best-effort dentro del proceso: revisa cada 30 s (hasta 10
+// veces, ~5 min) si el video ya apareció, y lo entrega. Nunca bloquea nada
+// (temporizador con unref: no impide que el proceso termine).
+function scheduleFarewellRetry(phone) {
+  let attempts = 0;
+  const tick = async () => {
+    attempts += 1;
+    const result = await deliverPendingFarewell(phone).catch(() => ({ ok: false }));
+    if (result.ok) return;
+    if (attempts < 10) {
+      const t = setTimeout(tick, 30000);
+      if (t.unref) t.unref();
+    }
+  };
+  const t = setTimeout(tick, 30000);
+  if (t.unref) t.unref();
+}
 
 // ---------- cierre de cada chat ----------
 
@@ -630,6 +783,27 @@ async function closeChat(st) {
       console.error('Error mandando el resumen:', e.message);
     }
   }
+  // Video de despedida personalizado (v3, best-effort, nunca retrasa la despedida).
+  // Escenario A (conversación larga, el video ya está listo): se manda el video
+  // institucional y DESPUÉS los enlaces de las redes.
+  // Escenario B (conversación corta, el video aún no está): se registra la
+  // entrega pendiente (sin hacer esperar a la persona) y se entrega después
+  // por el endpoint POST /deliver-farewell o el reintento best-effort.
+  const farewellPath = st.name ? farewellVideoPath(st.name) : null;
+  if (farewellPath && fs.existsSync(farewellPath)) {
+    try {
+      await wa.sendVideo(st.phone, farewellPath);
+      const links = socialLinksMessage();
+      if (links) await wa.sendText(st.phone, links);
+    } catch (e) {
+      console.error('Error mandando el video de despedida:', e.message);
+    }
+    st.farewellPending = null; // entregado (si había un pendiente, ya quedó)
+  } else if (st.farewellVideoRequested && st.name) {
+    // El video se pidió pero aún no está listo: queda pendiente en silencio.
+    st.farewellPending = { name: st.name, requestedAt: new Date().toISOString() };
+    scheduleFarewellRetry(st.phone);
+  }
   // Cierre oficial en nota de voz (audio pregrabado con la voz de Daniela)
   try {
     if (fs.existsSync(config.media.closingAudio)) {
@@ -652,20 +826,40 @@ async function closeChat(st) {
   st.obsceneCount = 0;
   st.probeCount = 0;
   st.offtopicCount = 0;
+  st.farewellVideoRequested = false; // la próxima conversación puede pedir otro
   st.stage = 'closed';
   saveState(st);
 }
 
-// ---------- transcripción de notas de voz ----------
+// ---------- transcripción de notas de voz (OpenAI Whisper) ----------
+// La nota de voz se descarga por la API de WhatsApp y se transcribe con la
+// API de OpenAI Whisper (modelo whisper-1, idioma español). La clave se lee
+// de OPENAI_API_KEY (config/.env) y NUNCA se escribe en el código ni en logs.
+// Si no hay clave o la transcripción falla, Daniela pide amablemente que le
+// escriban el mensaje (no intenta transcribir en local: en FadeHost no hay
+// Python/ffmpeg). El texto transcrito se procesa como un mensaje normal.
 
-function transcribeAudio(filePath) {
-  return new Promise((resolve) => {
-    const [cmd, ...args] = config.transcribeCmd.split(' ');
-    execFile(cmd, [...args, filePath], { timeout: 120000 }, (err, stdout) => {
-      if (err) return resolve(null);
-      resolve((stdout || '').trim() || null);
+async function transcribeWithOpenAI(filePath) {
+  const key = config.openaiApiKey;
+  if (!key) return null;
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: 'audio/ogg' }), 'audio.ogg');
+    form.append('model', 'whisper-1');
+    form.append('language', 'es');
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      body: form,
     });
-  });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => ({}));
+    const text = (data.text || '').trim();
+    return text || null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------- detección de intención (solo texto libre, sin menús) ----------
@@ -695,6 +889,135 @@ function isAffirmative(text) {
   return contains(text, ['claro', 'por favor', 'me gustaria', 'quiero verlo', 'si quiero', 'adelante', 'dale']);
 }
 
+// ---------- contactos personales / temas que no son Blü Bee (v3) ----------
+// Cuando el mensaje NO es de Blü Bee (saludo personal a Pedro, tema social,
+// u otro negocio), Daniela NO intenta vender: responde con calidez, se
+// presenta como la asistente virtual de Pedro y le pasa el mensaje a Pedro
+// de inmediato.
+// OJO: esto NO rompe la regla de anonimato del CEO. La regla es no revelar
+// el nombre "Pedro" a un EXTRAÑO. Aquí la persona YA conoce a Pedro (lo
+// saluda por su nombre o le escribe de otro negocio), así que Daniela puede
+// hablar de él. Para un prospecto que no lo conoce, el traspaso sigue siendo
+// "la persona indicada" (ver el caso 'pedro' de handleMainIntent).
+
+// Palabras de otro negocio (ej. caso real: Edgar Cadena, "me interesa
+// comprarte unas cajas de otro negocio").
+const OTHER_BUSINESS_PATTERNS = [
+  'comprar', 'comprarte', 'comprarme', 'vender', 'venderte', 'venderme',
+  'cajas', 'otro negocio', 'otro tema', 'de otro negocio', 'otra cosa',
+  'te compro', 'te vendo', 'me interesa comprar',
+];
+
+// Detecta si el mensaje es personal / no es de Blü Bee.
+// Devuelve 'greeting' | 'other_business' | 'social' o null.
+// Nunca se activa para intenciones claras de negocio (demo, precio, info,
+// sector, faq, proveedor, despedida, ni "hablar con Pedro").
+function detectPersonal(text, norm, st, intent) {
+  if (intent && ['demo', 'price', 'info', 'sector', 'faq', 'vendor', 'farewell', 'pedro'].includes(intent.kind)) {
+    return null;
+  }
+  // Si la persona se presenta COMO Pedro ("soy Pedro", "me llamo Pedro"),
+  // no es un saludo A Pedro: es su nombre. No es personal.
+  if (/\b(soy|me llamo|mi nombre es)\s+pedro\b/.test(norm)) return null;
+
+  const t = ` ${norm} `;
+  const mentionsPedro = t.includes(' pedro ');
+  const greeting = /\b(hola|buenas|buenos dias|buenas tardes|buenas noches|que tal)\b/.test(norm);
+
+  // 1) Otro negocio (ej. "hola Pedro, oye me interesa comprarte unas cajas
+  //    de otro negocio"): se canaliza a Pedro, sin vender Blü Bee.
+  const otherBusiness = OTHER_BUSINESS_PATTERNS.some((w) => t.includes(` ${normalize(w)} `));
+  if (otherBusiness && mentionsPedro) return 'other_business';
+
+  // 2) Saludo casual a Pedro ("hola Pedro, ¿cómo estás?").
+  if (mentionsPedro && greeting) return 'greeting';
+
+  // 3) Mensaje social superficial, cuando ya estamos en modo personal
+  //    (después del saludo casual o de un tema personal).
+  if (st.personalTopic || st.personalGreeted) {
+    const social = /comer|cafe|tiempo|partido|futbol|chivas|america|salir|vamos|nos vemos|que haces|como andas|como te va|que tal|saludar/.test(norm);
+    if (social) return 'social';
+    // En modo personal, cualquier mensaje corto que no sea de negocio se canaliza.
+    if (norm.split(' ').filter(Boolean).length <= 10 && !detectNeed(text)) return 'social';
+  }
+
+  return null;
+}
+
+// Responde a un mensaje personal / no es de Blü Bee.
+async function handlePersonal(msg, st, text, kind) {
+  const from = st.phone;
+  if (kind === 'greeting') {
+    // Primer saludo casual: respuesta breve y cálida (en nombre de Pedro,
+    // como él pidió). En el siguiente mensaje superficial, Daniela ya se
+    // presenta y lo canaliza con Pedro (caso 'social').
+    st.personalGreeted = true;
+    saveState(st);
+    await wa.sendText(from, '¡Hola! Bien, ¿y tú?');
+    return;
+  }
+  if (kind === 'other_business') {
+    // Otro negocio: cálida, se presenta, pasa el mensaje a Pedro. No vende Blü Bee.
+    st.personalTopic = true;
+    saveState(st);
+    await wa.sendText(from, 'Hola, soy Daniela, la asistente virtual de Pedro. Dame un segundo, le mando tu mensaje para que te contacte de inmediato.');
+    await notifyPeter(
+      'Mensaje personal (otro tema)',
+      `Mensaje para ti (no es de Blü Bee), de ${st.name || from} (${from}):\n"${text}"\n\nDaniela le contestó que le pasa tu mensaje de inmediato.`,
+      st
+    );
+    return;
+  }
+  // 'social': lo canaliza con Pedro, se presenta y comparte la página.
+  st.personalTopic = true;
+  saveState(st);
+  await wa.sendText(from, 'Permíteme un segundo, te canalizo con Pedro. Me presento, soy Daniela, su asistente virtual de Blü Bee Technologies. Te dejo aquí el enlace de nuestra página para que sepas qué es lo que hacemos mientras contacto a Pedro: https://blubeetech.com.mx');
+  await notifyPeter(
+    'Mensaje personal',
+    `Mensaje personal para ti, de ${st.name || from} (${from}):\n"${text}"\n\nDaniela le dijo que te canaliza con él y le compartió la página de Blü Bee.`,
+    st
+  );
+}
+
+// Responde una pregunta de información/sector/FAQ/base de conocimiento SIN
+// cambiar la etapa (para la primera vez o mientras falta el nombre: primero
+// se responde, y la identidad se pide de forma natural después). No ofrece
+// el video aquí (eso se hace después, cuando ya se sabe quién escribe).
+// Devuelve true si respondió algo.
+async function answerInfoQuestion(st, text, norm) {
+  const from = st.phone;
+  const kb = findAnswer(text);
+  if (kb) {
+    await wa.sendText(from, kb.answer);
+    const sector = detectSector(text);
+    if (sector) {
+      st.sector = sector;
+      saveState(st);
+    }
+    return true;
+  }
+  const intent = detectIntent(text, norm);
+  if (!intent) return false;
+  if (intent.kind === 'sector') {
+    await wa.sendText(from, SECTOR_INFO[intent.key]);
+    st.sector = intent.key;
+    saveState(st);
+    return true;
+  }
+  if (intent.kind === 'faq') {
+    await wa.sendText(from, FAQ[intent.key]);
+    return true;
+  }
+  if (intent.kind === 'info') {
+    await wa.sendText(
+      from,
+      'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.\n\n¿Para qué sector lo necesita? (Hotel, hospital, viñedo, centro comercial, industria, gobierno, ciudad inteligente…)'
+    );
+    return true;
+  }
+  return false;
+}
+
 // ---------- el corazón: procesar un mensaje entrante ----------
 
 async function handleMessage(msg) {
@@ -713,11 +1036,16 @@ async function handleMessage(msg) {
   else if (msg.type === 'interactive' && msg.interactive?.button_reply) {
     text = msg.interactive.button_reply.title || '';
   } else if (msg.type === 'audio' || msg.type === 'voice') {
-    // Nota de voz: descargarla y transcribirla
+    // Nota de voz: transcribirla con Whisper de OpenAI y procesarla como texto.
+    // Sin clave de OpenAI, Daniela pide amablemente que le escriban el mensaje.
+    if (!config.openaiApiKey) {
+      await wa.sendText(from, 'Perdón, ahorita no puedo escuchar notas de voz. ¿Me lo puedes escribir, por favor? Así te atiendo mejor.');
+      return;
+    }
     try {
       const tmp = path.join(config.stateDir, `audio-${Date.now()}.ogg`);
       await wa.downloadMedia(msg.audio.id, tmp);
-      const transcribed = await transcribeAudio(tmp);
+      const transcribed = await transcribeWithOpenAI(tmp);
       fs.unlink(tmp, () => {});
       if (!transcribed) {
         await wa.sendText(from, 'Perdón, no pude escuchar bien tu audio. ¿Me lo puedes repetir o escribir, por favor?');
@@ -785,6 +1113,16 @@ async function handleMessage(msg) {
   // etapas (también mientras espera nombre/empresa/contacto).
   if (await checkLimits(st, text)) return;
 
+  // Contactos personales / temas que no son Blü Bee (v3): se canalizan a
+  // Pedro con calidez, sin el video de bienvenida ni el interrogatorio.
+  // Va antes del flujo por etapas, así aplica en cualquier etapa.
+  const earlyIntent = detectIntent(text, norm);
+  const personal = detectPersonal(text, norm, st, earlyIntent);
+  if (personal) {
+    await handlePersonal(msg, st, text, personal);
+    return;
+  }
+
   // --- Primera vez: video de bienvenida + pedir nombre y empresa ---
   if (st.stage === 'new') {
     try {
@@ -793,7 +1131,7 @@ async function handleMessage(msg) {
       console.error('Error mandando el video de bienvenida:', e.message);
     }
     // Si el primer mensaje ya trae el nombre ("hola Daniela soy Ana"),
-    // no se lo vuelve a pedir: se guarda y se pasa a cómo dirigirse.
+    // no se lo vuelve a pedir: se guarda y se atiende su necesidad.
     const first = parseNameCompany(text);
     if (first.name) {
       st.name = first.name;
@@ -807,9 +1145,59 @@ async function handleMessage(msg) {
       if (intent && ['demo', 'price', 'pedro', 'pedro_message', 'vendor', 'sector', 'faq', 'info'].includes(intent.kind)) {
         st.pendingNeed = { text: stripped, norm: normalize(stripped) };
       }
+      // Flujo ágil (v3): si ya expresó su necesidad, la necesidad manda:
+      // se atiende directo, sin el interrogatorio de trato y contacto
+      // (esos datos se capturan en el punto natural, al agendar o al tomar
+      // el recado). Si no hay necesidad, sigue el flujo normal.
+      if (st.pendingNeed) {
+        const need = st.pendingNeed;
+        st.pendingNeed = null;
+        st.stage = 'main';
+        saveState(st);
+        // Si la necesidad es vaga (sin intención clara ni respuesta en la
+        // base), Daniela explora con una pregunta abierta en vez de quedarse
+        // callada.
+        const needIntent = detectIntent(need.text, need.norm);
+        const needKb = findAnswer(need.text);
+        if (!needIntent && !needKb) {
+          await wa.sendText(from, `Mucho gusto, ${first.name}. Cuéntame, ¿qué necesitas? Así te ayudo con lo que buscas.`);
+          return;
+        }
+        await wa.sendText(from, `Mucho gusto, ${first.name}.`);
+        return handleMainIntent(msg, st, need.text, need.norm);
+      }
       st.stage = 'awaiting_address_pref';
       saveState(st);
       await wa.sendText(from, `Mucho gusto, ${first.name}. ¿Cómo prefiere que le llame? ¿Le hablo de tú o de usted?`);
+      return;
+    }
+    // Flujo ágil (v3): si el primer mensaje ya expresa una necesidad pero
+    // no trae el nombre, Daniela primero reconoce la necesidad y pide los
+    // datos de forma natural en el mismo mensaje (no un interrogatorio).
+    const firstNeed = detectNeed(text);
+    const firstIntent = detectIntent(text, norm);
+    if (firstNeed && !firstIntent) {
+      st.pendingNeed = { text, norm };
+      st.needsContact = true;
+      st.stage = 'awaiting_name_company';
+      saveState(st);
+      await wa.sendText(
+        from,
+        'Claro, con gusto te ayudo con eso. Soy Daniela, la asistente virtual de Blü Bee. Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes? Si es un tema personal, también me lo puedes decir.'
+      );
+      return;
+    }
+    if (firstIntent && ['info', 'sector', 'faq'].includes(firstIntent.kind)) {
+      // Pregunta concreta (información/sector/FAQ o base de conocimiento):
+      // se responde sin cambiar la etapa y se pide la identidad natural.
+      st.needsContact = true;
+      st.stage = 'awaiting_name_company';
+      saveState(st);
+      await answerInfoQuestion(st, text, norm);
+      const stAfter = loadState(from);
+      if (!stAfter.name) {
+        await wa.sendText(from, 'Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes? Si es un tema personal, también me lo puedes decir.');
+      }
       return;
     }
     await wa.sendText(
@@ -836,6 +1224,27 @@ async function handleMessage(msg) {
       if (intent && ['demo', 'price', 'pedro', 'pedro_message', 'vendor', 'sector', 'faq', 'info'].includes(intent.kind)) {
         st.pendingNeed = { text: stripped, norm: normalize(stripped) };
       }
+      // Flujo ágil (v3): si ya había expresado su necesidad, la necesidad
+      // manda: se atiende directo, sin el interrogatorio de trato y contacto
+      // (esos datos se capturan en el punto natural, al agendar o al tomar
+      // el recado). Si no hay necesidad, sigue el flujo normal.
+      if (st.pendingNeed) {
+        const need = st.pendingNeed;
+        st.pendingNeed = null;
+        st.stage = 'main';
+        saveState(st);
+        // Si la necesidad es vaga (sin intención clara ni respuesta en la
+        // base), Daniela explora con una pregunta abierta en vez de quedarse
+        // callada.
+        const needIntent = detectIntent(need.text, need.norm);
+        const needKb = findAnswer(need.text);
+        if (!needIntent && !needKb) {
+          await wa.sendText(from, `Mucho gusto, ${name}. Cuéntame, ¿qué necesitas? Así te ayudo con lo que buscas.`);
+          return;
+        }
+        await wa.sendText(from, `Mucho gusto, ${name}.`);
+        return handleMainIntent(msg, st, need.text, need.norm);
+      }
       st.stage = 'awaiting_address_pref';
       saveState(st);
       await wa.sendText(from, `Mucho gusto, ${name}. ¿Cómo prefiere que le llame? ¿Le hablo de tú o de usted?`);
@@ -847,6 +1256,26 @@ async function handleMessage(msg) {
     if (company) st.company = company;
     saveState(st);
     const intent = detectIntent(text, norm);
+    const need = detectNeed(text);
+    if (need && !intent) {
+      // Necesidad vaga ("quiero que me ayudes en esto"): Daniela primero
+      // reconoce la necesidad y pide los datos de forma natural en el mismo
+      // mensaje (no un interrogatorio). La necesidad se atiende cuando
+      // llegue el nombre.
+      st.pendingNeed = { text, norm };
+      saveState(st);
+      await wa.sendText(from, 'Claro, con gusto te ayudo con eso. Soy Daniela, la asistente virtual de Blü Bee. Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes? Si es un tema personal, también me lo puedes decir.');
+      return;
+    }
+    // Pregunta concreta (base de conocimiento, info, sector, FAQ): se
+    // responde sin cambiar la etapa y se pide la identidad de forma natural.
+    if (await answerInfoQuestion(st, text, norm)) {
+      const stAfter = loadState(from);
+      if (!stAfter.name) {
+        await wa.sendText(from, 'Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes? Si es un tema personal, también me lo puedes decir.');
+      }
+      return;
+    }
     if (!intent) {
       const ackWords = ['ok', 'va', 'perfecto', 'claro', 'entendido', 'entiendo', 'bien', 'vale', 'sale', 'de acuerdo'];
       if (ackWords.includes(norm)) {
@@ -915,6 +1344,7 @@ async function handleMessage(msg) {
       if (onlyCompany) st.company = onlyCompany;
     }
     st.needsContact = !(st.name && st.company);
+    maybeRequestFarewellVideo(st); // prospecto con nombre: preparar el video de despedida
     st.stage = 'demo_when';
     saveState(st);
     const display = st.preferredName || st.name;
@@ -962,6 +1392,7 @@ async function handleMessage(msg) {
       if (onlyCompany) st.company = onlyCompany;
     }
     st.needsContact = !(st.name && st.company);
+    maybeRequestFarewellVideo(st); // prospecto con nombre: preparar el video de despedida
     st.stage = 'taking_message';
     saveState(st);
     const display = st.preferredName || st.name;
@@ -996,6 +1427,15 @@ async function handleMessage(msg) {
 
   // --- Esperando respuesta a la oferta del video ---
   if (st.stage === 'awaiting_video_answer') {
+    // Si es una pregunta nueva (no un sí/no al video), se atiende como
+    // mensaje nuevo: la conversación sigue fluida, no se traba en el video.
+    const vIntent = detectIntent(text, norm);
+    const vKb = findAnswer(text);
+    if ((vIntent && ['demo', 'price', 'info', 'sector', 'faq', 'vendor', 'pedro', 'pedro_message', 'farewell'].includes(vIntent.kind)) || vKb) {
+      st.stage = 'main';
+      saveState(st);
+      return handleMainIntent(msg, st, text, norm);
+    }
     if (isAffirmative(text)) {
       st.stage = 'main';
       saveState(st);
@@ -1027,14 +1467,41 @@ async function handleMainIntent(msg, st, text, norm) {
   const leTe = st.formality === 'tu' ? 'te' : 'le';
   const intent = detectIntent(text, norm);
 
-  // Sin intención clara y fuera de tema: no contesta, avisa a Pedro.
+  // Base de conocimiento (v3): si no hay una intención clara, Daniela
+  // responde como experta (tecnología, IoT, servicios). Si tampoco sabe,
+  // se registra la pregunta para aprender (sin datos personales) y se avisa
+  // a Pedro, como antes.
   if (!intent) {
+    const kb = findAnswer(text);
+    if (kb) {
+      await wa.sendText(from, kb.answer);
+      const sector = detectSector(text);
+      if (sector) {
+        st.sector = sector;
+        saveState(st);
+      }
+      if (kb.offerVideo) {
+        st.stage = 'awaiting_video_answer';
+        saveState(st);
+        await wa.sendText(from, '¿Le gustaría ver un breve video de lo que hacemos en Blü Bee?');
+      }
+      maybeRequestFarewellVideo(st);
+      return;
+    }
+    logUnanswered(text);
     await notifyPeter(
       'Mensaje que no es de Blü Bee',
       `Mensaje en tu WhatsApp Business que no es de Blü Bee, de ${st.name || from} (${from}):\n"${text}"\n\nDaniela no contestó.`,
       st
     );
     return;
+  }
+
+  // Prospecto real o cliente importante: si ya tiene nombre y muestra
+  // interés (demo, precio, información, sector), se pide el video de
+  // despedida en segundo plano (nunca bloquea la conversación).
+  if (['demo', 'price', 'info', 'sector', 'faq'].includes(intent.kind)) {
+    maybeRequestFarewellVideo(st);
   }
 
   switch (intent.kind) {
@@ -1117,11 +1584,45 @@ async function handleMainIntent(msg, st, text, norm) {
     }
 
     case 'faq': {
+      // Primero la base de conocimiento (respuesta experta y concreta);
+      // si no hay, la respuesta corta del FAQ.
+      const kb = findAnswer(text);
+      if (kb) {
+        await wa.sendText(from, kb.answer);
+        const sector = detectSector(text);
+        if (sector) {
+          st.sector = sector;
+          saveState(st);
+        }
+        if (kb.offerVideo) {
+          st.stage = 'awaiting_video_answer';
+          saveState(st);
+          await wa.sendText(from, '¿Le gustaría ver un breve video de lo que hacemos en Blü Bee?');
+        }
+        return;
+      }
       await wa.sendText(from, FAQ[intent.key]);
       return;
     }
 
     case 'sector': {
+      // Primero la base de conocimiento: si el mensaje trae una necesidad
+      // concreta (ej. "se me pierden los equipos en el hospital"), esa
+      // respuesta experta manda sobre el pitch genérico del sector.
+      const kb = findAnswer(text);
+      if (kb) {
+        await wa.sendText(from, kb.answer);
+        st.sector = intent.key;
+        saveState(st);
+        if (kb.offerVideo) {
+          st.stage = 'awaiting_video_answer';
+          saveState(st);
+          await wa.sendText(from, '¿Le gustaría ver un breve video de lo que hacemos en Blü Bee?');
+        }
+        return;
+      }
+      // Respuesta adaptada al sector (desde conocimiento.js) + oferta del video.
+      st.sector = intent.key;
       await wa.sendText(from, SECTOR_INFO[intent.key]);
       st.stage = 'awaiting_video_answer';
       saveState(st);
@@ -1130,6 +1631,23 @@ async function handleMainIntent(msg, st, text, norm) {
     }
 
     case 'info': {
+      // Primero la base de conocimiento (si la pregunta es concreta);
+      // si no, la explicación general de Blü Bee.
+      const kb = findAnswer(text);
+      if (kb) {
+        await wa.sendText(from, kb.answer);
+        const sector = detectSector(text);
+        if (sector) {
+          st.sector = sector;
+          saveState(st);
+        }
+        if (kb.offerVideo) {
+          st.stage = 'awaiting_video_answer';
+          saveState(st);
+          await wa.sendText(from, '¿Le gustaría ver un breve video de lo que hacemos en Blü Bee?');
+        }
+        return;
+      }
       await wa.sendText(
         from,
         'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.\n\n¿Para qué sector lo necesita? (Hotel, hospital, viñedo, centro comercial, industria, gobierno, ciudad inteligente…)'
@@ -1166,4 +1684,19 @@ module.exports = {
   looksObscene,
   looksIdentityProbe,
   looksGeneralTask,
+  // Daniela inteligente (v3)
+  detectPersonal,
+  handlePersonal,
+  answerInfoQuestion,
+  // Video de despedida personalizado (v3)
+  farewellPhrase,
+  farewellVideoFileName,
+  farewellVideoPath,
+  socialLinksMessage,
+  requestFarewellVideo,
+  maybeRequestFarewellVideo,
+  deliverPendingFarewell,
+  scheduleFarewellRetry,
+  // Transcripción de notas de voz (OpenAI Whisper)
+  transcribeWithOpenAI,
 };

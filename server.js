@@ -3,7 +3,7 @@
 
 const express = require('express');
 const config = require('./config');
-const { handleMessage } = require('./daniela');
+const { handleMessage, deliverPendingFarewell } = require('./daniela');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -47,6 +47,31 @@ app.post('/webhook', async (req, res) => {
     }
   } catch (e) {
     console.error('Error en el webhook:', e);
+  }
+});
+
+// Entrega diferida del video de despedida personalizado (escenario B, v3).
+// El proceso que genera el video llama a este endpoint cuando el video ya
+// está listo en media/despedida-<nombre>.mp4, con el teléfono en el cuerpo:
+//   POST /deliver-farewell  { "phone": "521234567890" }
+// Si hay una entrega pendiente para ese teléfono y el video ya existe, lo
+// envía junto con los enlaces de las redes y limpia el pendiente.
+// Si no hay pendiente o el video aún no existe, responde ok:false con el motivo.
+// Si FAREWELL_ENDPOINT_TOKEN está configurado, la petición debe incluirlo
+// (campo "token" en el cuerpo o cabecera x-farewell-token).
+app.post('/deliver-farewell', async (req, res) => {
+  const phone = req.body && req.body.phone;
+  if (!phone) return res.status(400).json({ ok: false, error: 'falta phone' });
+  const token = (req.body && req.body.token) || req.headers['x-farewell-token'];
+  if (config.farewellEndpointToken && token !== config.farewellEndpointToken) {
+    return res.status(403).json({ ok: false, error: 'token inválido' });
+  }
+  try {
+    const result = await deliverPendingFarewell(String(phone));
+    return res.json(result);
+  } catch (e) {
+    console.error('Error en /deliver-farewell:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
