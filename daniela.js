@@ -15,8 +15,8 @@
 // ágil, no solo recepcionista. Base de conocimiento (conocimiento.js) para
 // responder preguntas de tecnología/IoT/servicios como experta; detección de
 // sector y respuestas adaptadas; flujo ágil intent-first (la necesidad manda,
-// la identidad se teje en la conversación); notas de voz con Whisper de
-// OpenAI; contactos personales / temas que no son Blü Bee se canalizan a
+// la identidad se teje en la conversación); notas de voz con Whisper (Groq,
+// gratis; OpenAI de respaldo); contactos personales / temas que no son Blü Bee se canalizan a
 // Pedro con calidez; aprendizaje (preguntas sin respuesta en
 // state/preguntas-sin-respuesta.json); video de despedida personalizado
 // (guion institucional fijo, solo cambia el nombre) con entrega inmediata
@@ -36,6 +36,11 @@
 // información. Las respuestas de Daniela escriben SIEMPRE la marca
 // correctamente ("Blü Bee" / "Blü Bee Technologies", con diéresis), aunque
 // la persona la haya escrito mal.
+// Transcripción de notas de voz con Groq Whisper, gratis (v3.5, 2026-11-11,
+// aprobado por Peter): Groq ofrece el mismo Whisper sin tarjeta ni saldo
+// mínimo y es el proveedor principal; OpenAI (whisper-1) queda como
+// respaldo si no hay clave de Groq. Sin ninguna clave, Daniela pide que le
+// escriban el mensaje. Ver chatbot-whatsapp-blu-bee-diseno.md §13.4.
 
 const fs = require('fs');
 const path = require('path');
@@ -115,6 +120,7 @@ function loadState(phone) {
     farewellVideoRequested: false, // ya se pidió el video de despedida en esta conversación
     farewellIdentity: null, // { kind: 'person'|'company'|'generic', name } usada en la solicitud (v3.3)
     farewellPending: null, // { kind, name, file, requestedAt } si la despedida se hizo sin video (entrega diferida)
+    vipGreetingCount: 0, // saludos cálidos VIP dados a Ricky (v3.4): cada 3, uno pregunta por Mila y Bruna
     known: false,
     handedOff: false,
   };
@@ -589,6 +595,128 @@ function isAffectionateGreeting(text) {
   return startsWithGreeting || startsWithTerm;
 }
 
+// ---------- trato VIP para Ricardo Roach ("Ricky", v3.4, 2026-11-11) ----------
+// Ricky es socio de Peter y va a estar enseñando y presumiendo a Daniela
+// como la asistente virtual de Blü Bee. Por eso Daniela le da un trato
+// especial y personal, distinto al de los demás contactos:
+// - Siempre lo llama "Ricky" (nunca "Ricardo" ni otro nombre).
+// - Le permite que le diga "Dani", "mi amor", "preciosa", "corazón" y
+//   otros cariños SIN activar el límite de coqueteo/acoso (v2.1/v3.1):
+//   para Ricky no es acoso, es trato de socio y amigo cercano.
+// - Tono EMPÁTICO, AMOROSO y PERSONAL, como de amiga cercana, pero siempre
+//   respetuoso y profesional. NO es romántico ni sexual: Daniela no
+//   coquetea de vuelta, no dice que lo ama, no manda fotos ni entra en
+//   juego romántico. Solo es cálida, cercana y atenta con él.
+// - De vez en cuando (no en cada mensaje) le pregunta por sus perras
+//   Mila y Bruna (Golden Retriever, como sus hijas) o les manda saludos,
+//   y menciona sus gustos (pádel, bici eléctrica, scooter) cuando encaja.
+// Contexto de Ricky: fanático del pádel (juega casi todos los días), bici
+// eléctrica y moto scooter; vive en Lomas de Tecamachalco, CDMX; ~57 años
+// como Peter, amigos de hace más de 40 años, apoya mucho a Peter. Mila
+// (mayor, ~8 años) y Bruna (joven, ~2-3 años, hija de Mila) son como sus
+// hijas; vive solo con ellas la mayor parte del tiempo.
+// Se identifica SOLO por su número de WhatsApp (config.vipRicky.phone),
+// con la misma comparación por últimos 10 dígitos que con Pedro.
+
+// ¿Es Ricky? Comparación por últimos 10 dígitos (sameNumber): Meta manda
+// el número con el "1" de móvil (521...) y la config puede traerlo con 52.
+function isVipRicky(phone) {
+  const vip = config.vipRicky;
+  if (!vip || !vip.phone) return false;
+  return sameNumber(phone, vip.phone);
+}
+
+// ¿Es este nombre el nombre registrado PROHIBIDO de Ricky ("Richard William
+// Roach Sánchez", config.vipRicky.forbiddenFullName)? Daniela NUNCA debe
+// llamarlo así ni decirle ese nombre; siempre es "Ricky". Se detecta por
+// sus dos nombres de pila ("Richard" + "William"), que es lo que sobrevive
+// al parseo: parseNameCompany toma como máximo 3 palabras del nombre
+// ("Richard William Roach") y parseAddressPref 2 ("Richard William").
+// La comparación es normalizada (minúsculas, sin acentos), así que da igual
+// cómo lo escriba él.
+function isVipForbiddenName(name) {
+  const norm = normalize(name || '');
+  if (!norm) return false;
+  const forbidden = (config.vipRicky && config.vipRicky.forbiddenFullName) || '';
+  if (forbidden && norm === normalize(forbidden)) return true;
+  return /\brichard\b/.test(norm) && /\bwilliam\b/.test(norm);
+}
+
+// Nombre parseado seguro para un VIP: si el nombre que dio Ricky es su
+// nombre registrado prohibido, se descarta y se usa "Ricky" (así ningún
+// flujo lo guarda, lo muestra ni lo usa para la despedida). Para los demás
+// contactos, el nombre se devuelve tal cual.
+function vipSafeParsedName(from, name) {
+  if (!name) return name;
+  if (isVipRicky(from) && isVipForbiddenName(name)) return 'Ricky';
+  return name;
+}
+
+// ¿Trae el mensaje un cariño o piropo dirigido a Daniela? Para Ricky no es
+// límite: "hola mi amor", "eres hermosa", "me gustas", "te amo", "qué guapa
+// eres"... (términos de AFFECTIONATE_TERMS o frases de EXPLICIT_FLIRT_PHRASES).
+function isVipAffectionate(text) {
+  const norm = normalize(text);
+  if (!norm) return false;
+  if (matchesAny(text, EXPLICIT_FLIRT_PHRASES)) return true;
+  return AFFECTIONATE_TERMS.some((t) => new RegExp(`\\b${t}\\b`).test(norm));
+}
+
+// Obscenidad genuina: groserías o contenido sexual explícito, SIN contar el
+// coqueteo. Las 23 frases de EXPLICIT_FLIRT_PHRASES también están en
+// OBSCENE_PHRASES; aquí se excluyen para que, para Ricky, el piropo no
+// cuente como obscenidad. Para cualquier otra persona el límite sigue igual.
+function looksGenuinelyObscene(text) {
+  if (matchesAny(text, OBSCENE_WORDS)) return true;
+  const nonFlirt = OBSCENE_PHRASES.filter((p) => !EXPLICIT_FLIRT_PHRASES.includes(p));
+  return matchesAny(text, nonFlirt);
+}
+
+// Línea personal ocasional para Ricky (v3.4; fútbol agregado 2026-11-11):
+// sus perras Mila y Bruna, el pádel (juega casi todos los días), la bici
+// eléctrica, el scooter y el fútbol (fanatiquísimo del América y de la
+// Champions; le va a los equipos ingleses). Solo en 1 de cada 3 saludos
+// VIP (saludos 1, 4, 7...), rotando la variante, para que sea natural y no
+// repetitivo ni forzado: las perras son lo más frecuente (3 de 7 variantes,
+// con mucho cariño, son como sus hijas), el fútbol 2 de 7 y los demás
+// gustos aparecen de vez en cuando. Son preguntas abiertas (nunca se afirma
+// un resultado: Daniela no tiene marcadores en vivo). Los nombres, gustos
+// y equipos salen de la config.
+function vipPersonalLine(st) {
+  const vip = config.vipRicky || {};
+  const dogs = vip.dogs || [];
+  if (dogs.length < 2) return '';
+  const count = st.vipGreetingCount || 0;
+  if (count % 3 !== 0) return '';
+  const [d1, d2] = dogs;
+  const football = vip.football || {};
+  const team = football.team || 'América';
+  const englishTeams = (football.englishTeams || []).slice(0, 2);
+  const englishLine = englishTeams.length === 2
+    ? `¿Ganaron el ${englishTeams[0]} y el ${englishTeams[1]}?`
+    : '¿Cómo les fue a tus equipos ingleses?';
+  const variants = [
+    `¿Cómo están ${d1} y ${d2}?`,
+    `¡Mándales saludos a ${d1} y ${d2} de mi parte!`,
+    `¿Cómo están tus niñas, ${d1} y ${d2}?`,
+    '¿Cómo te fue en el pádel?',
+    '¿Ya saliste a rodar en la bici o en el scooter?',
+    `¿Cómo le fue al ${team}?`,
+    englishLine,
+  ];
+  return variants[Math.floor(count / 3) % variants.length];
+}
+
+// Saludo cálido y personal para Ricky, con la línea personal solo a veces
+// (ver vipPersonalLine). Incrementa el contador: quien lo llama debe
+// guardar el estado después (saveState).
+function vipWarmGreeting(st) {
+  const personalLine = vipPersonalLine(st);
+  st.vipGreetingCount = (st.vipGreetingCount || 0) + 1;
+  const base = '¡Hola Ricky! Qué gusto saludarte, ¿en qué te puedo ayudar?';
+  return personalLine ? `${base} ${personalLine}` : base;
+}
+
 // Revisa los límites para un mensaje. Se llama DESPUÉS del filtro de estafa
 // y del comando de reinicio de Pedro, y ANTES del flujo normal, así aplica
 // en TODAS las etapas (también mientras espera nombre/empresa/contacto: un
@@ -604,6 +732,12 @@ async function checkLimits(st, text) {
 
   // 1) Obscenidades, acoso o contenido sexual.
   if (looksObscene(text)) {
+    // VIP Ricky (v3.4): si lo único "obsceno" es cariño o piropo
+    // ("eres hermosa", "me gustas", "te amo"...), NO es límite para él:
+    // se deja pasar al flujo normal, que le responde con calidez. Solo
+    // la obscenidad genuina (groserías, contenido sexual explícito) sigue
+    // el límite como con cualquier otra persona. No se cuenta ni se avisa.
+    if (isVipRicky(from) && !looksGenuinelyObscene(text)) return false;
     st.obsceneCount = (st.obsceneCount || 0) + 1;
     saveState(st);
     const repeated = st.obsceneCount >= 2;
@@ -1011,24 +1145,33 @@ async function closeChat(st) {
   saveState(st);
 }
 
-// ---------- transcripción de notas de voz (OpenAI Whisper) ----------
+// ---------- transcripción de notas de voz (Whisper: Groq gratis, OpenAI de respaldo) ----------
 // La nota de voz se descarga por la API de WhatsApp y se transcribe con la
-// API de OpenAI Whisper (modelo whisper-1, idioma español). La clave se lee
-// de OPENAI_API_KEY (config/.env) y NUNCA se escribe en el código ni en logs.
-// Si no hay clave o la transcripción falla, Daniela pide amablemente que le
-// escriban el mensaje (no intenta transcribir en local: en FadeHost no hay
+// API de Whisper (idioma español). Proveedor principal: Groq (gratuito, sin
+// tarjeta; endpoint compatible con OpenAI, modelo whisper-large-v3, clave
+// GROQ_API_KEY). Respaldo: OpenAI (modelo whisper-1, clave OPENAI_API_KEY).
+// Prioridad: Groq > OpenAI > pedir que escriban. Las claves se leen de
+// config/.env y NUNCA se escriben en el código ni en logs. Si no hay clave
+// o la transcripción falla, Daniela pide amablemente que le escriban el
+// mensaje (no intenta transcribir en local: en FadeHost no hay
 // Python/ffmpeg). El texto transcrito se procesa como un mensaje normal.
 
-async function transcribeWithOpenAI(filePath) {
-  const key = config.openaiApiKey;
+const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+const GROQ_TRANSCRIBE_MODEL = 'whisper-large-v3';
+const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
+const OPENAI_TRANSCRIBE_MODEL = 'whisper-1';
+
+// Transcripción genérica contra un endpoint compatible con OpenAI Whisper
+// (multipart/form-data con el archivo de audio, modelo e idioma).
+async function transcribeWithProvider(endpoint, model, key, filePath) {
   if (!key) return null;
   try {
     const buffer = fs.readFileSync(filePath);
     const form = new FormData();
     form.append('file', new Blob([buffer], { type: 'audio/ogg' }), 'audio.ogg');
-    form.append('model', 'whisper-1');
+    form.append('model', model);
     form.append('language', 'es');
-    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}` },
       body: form,
@@ -1040,6 +1183,22 @@ async function transcribeWithOpenAI(filePath) {
   } catch {
     return null;
   }
+}
+
+async function transcribeWithGroq(filePath) {
+  return transcribeWithProvider(GROQ_TRANSCRIBE_URL, GROQ_TRANSCRIBE_MODEL, config.groqApiKey, filePath);
+}
+
+async function transcribeWithOpenAI(filePath) {
+  return transcribeWithProvider(OPENAI_TRANSCRIBE_URL, OPENAI_TRANSCRIBE_MODEL, config.openaiApiKey, filePath);
+}
+
+// Despachador: Groq (gratis) primero; OpenAI solo si no hay clave de Groq;
+// null si no hay ninguna clave (Daniela pide que escriban).
+async function transcribeAudio(filePath) {
+  if (config.groqApiKey) return transcribeWithGroq(filePath);
+  if (config.openaiApiKey) return transcribeWithOpenAI(filePath);
+  return null;
 }
 
 // ---------- detección de intención (solo texto libre, sin menús) ----------
@@ -1210,22 +1369,36 @@ async function handleMessage(msg) {
     saveState(st); // si no, el archivo queda en 'closed' aunque ya esté activa
   }
 
+  // Trato VIP — Ricky, socio de Peter (v3.4): Daniela siempre lo llama
+  // "Ricky", aunque él diga otro nombre o no dé nombre. Se fija por su
+  // número en cada mensaje, así ningún flujo lo puede cambiar. En el primer
+  // contacto también se le habla de tú (trato personal de socio y amigo);
+  // si él pide explícitamente que le hablen de usted, ese flujo lo cambia
+  // y ya no se vuelve a tocar (solo se fija en 'new').
+  if (isVipRicky(from)) {
+    st.name = 'Ricky';
+    st.preferredName = 'Ricky';
+    if (st.stage === 'new') st.formality = 'tu';
+    saveState(st);
+  }
+
   // Texto del mensaje (o texto del botón que tocó, por compatibilidad)
   let text = '';
   if (msg.type === 'text') text = msg.text.body || '';
   else if (msg.type === 'interactive' && msg.interactive?.button_reply) {
     text = msg.interactive.button_reply.title || '';
   } else if (msg.type === 'audio' || msg.type === 'voice') {
-    // Nota de voz: transcribirla con Whisper de OpenAI y procesarla como texto.
-    // Sin clave de OpenAI, Daniela pide amablemente que le escriban el mensaje.
-    if (!config.openaiApiKey) {
+    // Nota de voz: transcribirla con Whisper (Groq gratis primero; OpenAI
+    // de respaldo) y procesarla como texto. Sin ninguna clave, Daniela pide
+    // amablemente que le escriban el mensaje.
+    if (!config.groqApiKey && !config.openaiApiKey) {
       await wa.sendText(from, 'Perdón, ahorita no puedo escuchar notas de voz. ¿Me lo puedes escribir, por favor? Así te atiendo mejor.');
       return;
     }
     try {
       const tmp = path.join(config.stateDir, `audio-${Date.now()}.ogg`);
       await wa.downloadMedia(msg.audio.id, tmp);
-      const transcribed = await transcribeWithOpenAI(tmp);
+      const transcribed = await transcribeAudio(tmp);
       fs.unlink(tmp, () => {});
       if (!transcribed) {
         await wa.sendText(from, 'Perdón, no pude escuchar bien tu audio. ¿Me lo puedes repetir o escribir, por favor?');
@@ -1313,8 +1486,14 @@ async function handleMessage(msg) {
     // Si el primer mensaje ya trae el nombre ("hola Daniela soy Ana"),
     // no se lo vuelve a pedir: se guarda y se atiende su necesidad.
     const first = parseNameCompany(text);
+    // VIP Ricky: su nombre registrado NUNCA se usa; aunque él lo escriba,
+    // se descarta y Daniela le dice "Ricky" (ver isVipForbiddenName).
+    first.name = vipSafeParsedName(from, first.name);
     if (first.name) {
-      st.name = first.name;
+      // VIP Ricky: el nombre siempre es "Ricky", aunque él diga otro
+      // nombre ("soy Ricardo" no cambia nada). El saludo usa "Ricky".
+      if (!isVipRicky(from)) st.name = first.name;
+      const displayName = isVipRicky(from) ? 'Ricky' : first.name;
       if (first.company) st.company = first.company;
       st.needsContact = !first.company;
       // La intención se detecta sin el nombre y la empresa (para no
@@ -1340,15 +1519,15 @@ async function handleMessage(msg) {
         const needIntent = detectIntent(need.text, need.norm);
         const needKb = findAnswer(need.text);
         if (!needIntent && !needKb) {
-          await wa.sendText(from, `Mucho gusto, ${first.name}. Cuéntame, ¿qué necesitas? Así te ayudo con lo que buscas.`);
+          await wa.sendText(from, `Mucho gusto, ${displayName}. Cuéntame, ¿qué necesitas? Así te ayudo con lo que buscas.`);
           return;
         }
-        await wa.sendText(from, `Mucho gusto, ${first.name}.`);
+        await wa.sendText(from, `Mucho gusto, ${displayName}.`);
         return handleMainIntent(msg, st, need.text, need.norm);
       }
       st.stage = 'awaiting_address_pref';
       saveState(st);
-      await wa.sendText(from, `Mucho gusto, ${first.name}. ¿Cómo prefiere que le llame? ¿Le hablo de tú o de usted?`);
+      await wa.sendText(from, `Mucho gusto, ${displayName}. ¿Cómo prefiere que le llame? ¿Le hablo de tú o de usted?`);
       return;
     }
     // Flujo ágil (v3): si el primer mensaje ya expresa una necesidad pero
@@ -1385,13 +1564,35 @@ async function handleMessage(msg) {
     // de forma coqueta y sin sermonear. Solo si no hay una intención de
     // negocio (demo, precio...): esa se atiende por su flujo normal. El
     // nombre se captura de forma natural en el siguiente mensaje.
+    // VIP Ricky: el saludo es personal y cercano, como de amiga (y a veces
+    // pregunta por Mila y Bruna).
     if (isAffectionateGreeting(text) && (!firstIntent || firstIntent.kind === 'greeting')) {
       st.stage = 'awaiting_name_company';
+      const greet = isVipRicky(from)
+        ? vipWarmGreeting(st)
+        : '¡Hola! Mucho gusto, soy Daniela, la asistente virtual de Blü Bee Technologies. ¿En qué te puedo ayudar?';
       saveState(st);
-      await wa.sendText(
-        from,
-        '¡Hola! Mucho gusto, soy Daniela, la asistente virtual de Blü Bee Technologies. ¿En qué te puedo ayudar?'
-      );
+      await wa.sendText(from, greet);
+      return;
+    }
+    // VIP Ricky: los cariños y piropos explícitos ("eres hermosa", "me
+    // gustas", "te amo", "hola mi amor") no son límite para él (v3.4):
+    // Daniela le responde con calidez, como amiga, sin sermonear. Solo si
+    // no hay una intención de negocio: esa se atiende por su flujo normal.
+    if (isVipRicky(from) && isVipAffectionate(text) && (!firstIntent || firstIntent.kind === 'greeting')) {
+      st.stage = 'awaiting_name_company';
+      const greet = vipWarmGreeting(st);
+      saveState(st);
+      await wa.sendText(from, greet);
+      return;
+    }
+    // VIP Ricky: un saludo simple ("hola") también se responde con calidez,
+    // como amiga, sin volver a pedirle el nombre (ya lo conocemos: Ricky).
+    if (isVipRicky(from) && firstIntent && firstIntent.kind === 'greeting') {
+      st.stage = 'awaiting_name_company';
+      const greet = vipWarmGreeting(st);
+      saveState(st);
+      await wa.sendText(from, greet);
       return;
     }
     await wa.sendText(
@@ -1405,9 +1606,14 @@ async function handleMessage(msg) {
 
   // --- Esperando nombre + empresa ---
   if (st.stage === 'awaiting_name_company') {
-    const { name, company } = parseNameCompany(text);
+    let { name, company } = parseNameCompany(text);
+    // VIP Ricky: su nombre registrado NUNCA se usa; aunque él lo escriba,
+    // se descarta y Daniela le dice "Ricky".
+    name = vipSafeParsedName(from, name);
     if (name) {
-      st.name = name;
+      // VIP Ricky: el nombre siempre es "Ricky", aunque él diga otro nombre.
+      if (!isVipRicky(from)) st.name = name;
+      const displayName = isVipRicky(from) ? 'Ricky' : name;
       if (company) st.company = company;
       st.needsContact = !company;
       // La intención se detecta sin el nombre y la empresa (para no
@@ -1433,15 +1639,15 @@ async function handleMessage(msg) {
         const needIntent = detectIntent(need.text, need.norm);
         const needKb = findAnswer(need.text);
         if (!needIntent && !needKb) {
-          await wa.sendText(from, `Mucho gusto, ${name}. Cuéntame, ¿qué necesitas? Así te ayudo con lo que buscas.`);
+          await wa.sendText(from, `Mucho gusto, ${displayName}. Cuéntame, ¿qué necesitas? Así te ayudo con lo que buscas.`);
           return;
         }
-        await wa.sendText(from, `Mucho gusto, ${name}.`);
+        await wa.sendText(from, `Mucho gusto, ${displayName}.`);
         return handleMainIntent(msg, st, need.text, need.norm);
       }
       st.stage = 'awaiting_address_pref';
       saveState(st);
-      await wa.sendText(from, `Mucho gusto, ${name}. ¿Cómo prefiere que le llame? ¿Le hablo de tú o de usted?`);
+      await wa.sendText(from, `Mucho gusto, ${displayName}. ¿Cómo prefiere que le llame? ¿Le hablo de tú o de usted?`);
       return;
     }
     // Sin nombre válido: NO insistir en bucle. Se ayuda con lo que pidieron
@@ -1487,6 +1693,8 @@ async function handleMessage(msg) {
     const { formality, preferredName } = parseAddressPref(text, st.name);
     st.formality = formality;
     st.preferredName = preferredName;
+    // VIP Ricky: el trato siempre es "Ricky", aunque él diga otro nombre.
+    if (isVipRicky(from)) st.preferredName = 'Ricky';
     st.stage = 'awaiting_contact';
     saveState(st);
     await wa.sendText(from, 'Perfecto. ¿Me comparte su correo y el número donde prefiere que le contactemos? ¿Prefiere llamada o WhatsApp?');
@@ -1530,8 +1738,12 @@ async function handleMessage(msg) {
 
   // --- Captura de datos faltantes antes de agendar la demo ---
   if (st.stage === 'demo_capture') {
-    const { name, company } = parseNameCompany(text);
-    if (name) st.name = name;
+    let { name, company } = parseNameCompany(text);
+    // VIP Ricky: su nombre registrado NUNCA se usa; aunque él lo escriba,
+    // se descarta y Daniela le dice "Ricky".
+    name = vipSafeParsedName(from, name);
+    // VIP Ricky: el nombre siempre es "Ricky".
+    if (name && !isVipRicky(from)) st.name = name;
     if (company) st.company = company;
     if (!st.name && !st.company) {
       const onlyCompany = looksLikeCompany(text);
@@ -1578,8 +1790,12 @@ async function handleMessage(msg) {
 
   // --- Captura de datos faltantes antes de tomar un recado (precio/propuesta) ---
   if (st.stage === 'price_capture') {
-    const { name, company } = parseNameCompany(text);
-    if (name) st.name = name;
+    let { name, company } = parseNameCompany(text);
+    // VIP Ricky: su nombre registrado NUNCA se usa; aunque él lo escriba,
+    // se descarta y Daniela le dice "Ricky".
+    name = vipSafeParsedName(from, name);
+    // VIP Ricky: el nombre siempre es "Ricky".
+    if (name && !isVipRicky(from)) st.name = name;
     if (company) st.company = company;
     if (!st.name && !st.company) {
       const onlyCompany = looksLikeCompany(text);
@@ -1660,6 +1876,16 @@ async function handleMainIntent(msg, st, text, norm) {
   const nameSuffix = display ? `, ${display}` : '';
   const leTe = st.formality === 'tu' ? 'te' : 'le';
   const intent = detectIntent(text, norm);
+
+  // VIP Ricky (v3.4): los cariños y piropos de Ricky no son límite ni tema
+  // de negocio: Daniela le responde con calidez, como amiga, y sigue. Solo
+  // si no hay una intención de negocio (demo, precio...): esa se atiende
+  // por su flujo normal.
+  if (isVipRicky(from) && isVipAffectionate(text) && (!intent || intent.kind === 'greeting')) {
+    await wa.sendText(from, vipWarmGreeting(st));
+    saveState(st);
+    return;
+  }
 
   // Base de conocimiento (v3): si no hay una intención clara, Daniela
   // responde como experta (tecnología, IoT, servicios). Si tampoco sabe,
@@ -1850,6 +2076,13 @@ async function handleMainIntent(msg, st, text, norm) {
     }
 
     case 'greeting': {
+      // VIP Ricky: saludo personal y cercano, como de amiga (a veces con
+      // Mila y Bruna). No el saludo genérico.
+      if (isVipRicky(from)) {
+        await wa.sendText(from, vipWarmGreeting(st));
+        saveState(st);
+        return;
+      }
       // Saludo por nombre si ya lo conoce (por perfil o por conversación).
       let greetName = display;
       if (!greetName && msg.profileName && looksLikeName(msg.profileName)) {
@@ -1880,6 +2113,14 @@ module.exports = {
   looksGeneralTask,
   // Diminutivos y cariños dirigidos a Daniela (v3.1)
   isAffectionateGreeting,
+  // Trato VIP para Ricky, socio de Peter (v3.4)
+  isVipRicky,
+  isVipForbiddenName,
+  vipSafeParsedName,
+  isVipAffectionate,
+  looksGenuinelyObscene,
+  vipPersonalLine,
+  vipWarmGreeting,
   // Normalización de la marca / errores de dedo (v3.2)
   normalizeBrandVariants,
   // Daniela inteligente (v3)
@@ -1899,6 +2140,8 @@ module.exports = {
   maybeRequestFarewellVideo,
   deliverPendingFarewell,
   scheduleFarewellRetry,
-  // Transcripción de notas de voz (OpenAI Whisper)
+  // Transcripción de notas de voz (Whisper: Groq gratis, OpenAI de respaldo)
+  transcribeWithGroq,
   transcribeWithOpenAI,
+  transcribeAudio,
 };

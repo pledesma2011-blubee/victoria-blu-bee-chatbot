@@ -1,6 +1,7 @@
 // Pruebas de "Daniela inteligente" (v3, 2026-11-11): base de conocimiento,
 // sector, flujo ágil intent-first, contactos personales / temas que no son
-// Blü Bee, notas de voz (Whisper) y video de despedida personalizado.
+// Blü Bee, notas de voz (Whisper: Groq gratis, OpenAI de respaldo, v3.5),
+// video de despedida personalizado y trato VIP para Ricky (v3.4).
 // Uso: node test-daniela-inteligente.js
 // No toca el estado real: usa un STATE_DIR temporal y un stub de whatsapp.js
 // (nada sale a la API de Meta; notifyPeter se registra en el log, no se envía).
@@ -680,6 +681,361 @@ function cleanupVideos() {
     await incoming(FJ4, 'mañana a las 10');
     st = readState(FJ4);
     check('el pendiente queda como persona', !!st && !!st.farewellPending && st.farewellPending.kind === 'person' && st.farewellPending.name === 'Laura Méndez', `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
+
+    // ---------- (k) Trato VIP para Ricardo Roach ("Ricky", v3.4, 2026-11-11)
+    // Socio de Peter: siempre "Ricky", los cariños y piropos no activan el
+    // límite, tono personal y cercano, y de vez en cuando (1 de cada 3
+    // saludos) pregunta por Mila y Bruna, el pádel, la bici/scooter o el
+    // fútbol (América, Champions, equipos ingleses). Su nombre registrado
+    // ("Richard William Roach Sánchez") NUNCA se usa: aunque él lo escriba,
+    // Daniela le dice "Ricky".
+    // Avisos a Pedro (notifyPeter) llegan como texto a PETER con el prefijo 🔔.
+    function kNoticesSince(mark2) {
+      return sent.slice(mark2).filter((s) => s.to === PETER && s.body.startsWith('🔔'));
+    }
+    const RICKY = '5215519518504'; // número real de Ricky (config.vipRicky.phone)
+    console.log('\n(k) Trato VIP para Ricky:');
+    check('isVipRicky("5215519518504") = true', daniela.isVipRicky('5215519518504') === true);
+    check('isVipRicky("5519518504") = true (solo últimos 10 dígitos)', daniela.isVipRicky('5519518504') === true);
+    check('isVipRicky("5215519518505") = false', daniela.isVipRicky('5215519518505') === false);
+    check('isVipRicky("521111000001") = false', daniela.isVipRicky('521111000001') === false);
+    check('isVipAffectionate("hola mi amor") = true', daniela.isVipAffectionate('hola mi amor') === true);
+    check('isVipAffectionate("eres hermosa") = true', daniela.isVipAffectionate('eres hermosa') === true);
+    check('isVipAffectionate("me gustas") = true', daniela.isVipAffectionate('me gustas') === true);
+    check('isVipAffectionate("te amo") = true', daniela.isVipAffectionate('te amo') === true);
+    check('isVipAffectionate("qué guapa eres") = true', daniela.isVipAffectionate('qué guapa eres') === true);
+    check('isVipAffectionate("hola, ¿qué es un beacon?") = false', daniela.isVipAffectionate('hola, ¿qué es un beacon?') === false);
+    check('looksGenuinelyObscene("eres hermosa") = false (piropo, no obscenidad)', daniela.looksGenuinelyObscene('eres hermosa') === false);
+    check('looksGenuinelyObscene("me gustas") = false', daniela.looksGenuinelyObscene('me gustas') === false);
+    check('looksGenuinelyObscene("te amo") = false', daniela.looksGenuinelyObscene('te amo') === false);
+    check('looksGenuinelyObscene("eres un pendejo") = true', daniela.looksGenuinelyObscene('eres un pendejo') === true);
+    check('looksGenuinelyObscene("hijo de puta") = true', daniela.looksGenuinelyObscene('hijo de puta') === true);
+    check('looksGenuinelyObscene("vamos a la cama") = true', daniela.looksGenuinelyObscene('vamos a la cama') === true);
+    check('looksGenuinelyObscene("hola mi amor") = false', daniela.looksGenuinelyObscene('hola mi amor') === false);
+    check('vipPersonalLine(count 0) pregunta por Mila y Bruna', /Mila y Bruna/.test(daniela.vipPersonalLine({ vipGreetingCount: 0 })), daniela.vipPersonalLine({ vipGreetingCount: 0 }));
+    check('vipPersonalLine(count 1) = "" (no en cada saludo)', daniela.vipPersonalLine({ vipGreetingCount: 1 }) === '');
+    check('vipPersonalLine(count 2) = ""', daniela.vipPersonalLine({ vipGreetingCount: 2 }) === '');
+    check('vipPersonalLine(count 3) saluda a Mila y Bruna', /Mila y Bruna/.test(daniela.vipPersonalLine({ vipGreetingCount: 3 })), daniela.vipPersonalLine({ vipGreetingCount: 3 }));
+    check('vipPersonalLine(count 6) pregunta por sus niñas', /tus niñas, Mila y Bruna/.test(daniela.vipPersonalLine({ vipGreetingCount: 6 })), daniela.vipPersonalLine({ vipGreetingCount: 6 }));
+    check('vipPersonalLine(count 9) pregunta por el pádel', /pádel/.test(daniela.vipPersonalLine({ vipGreetingCount: 9 })), daniela.vipPersonalLine({ vipGreetingCount: 9 }));
+    check('vipPersonalLine(count 12) pregunta por la bici o el scooter', /bici| scooter/.test(daniela.vipPersonalLine({ vipGreetingCount: 12 })), daniela.vipPersonalLine({ vipGreetingCount: 12 }));
+    check('vipPersonalLine(count 15) pregunta por el América (fútbol)', /América/.test(daniela.vipPersonalLine({ vipGreetingCount: 15 })), daniela.vipPersonalLine({ vipGreetingCount: 15 }));
+    check('vipPersonalLine(count 18) pregunta por el Manchester United y el Tottenham (fútbol inglés)', /Manchester United/.test(daniela.vipPersonalLine({ vipGreetingCount: 18 })) && /Tottenham/.test(daniela.vipPersonalLine({ vipGreetingCount: 18 })), daniela.vipPersonalLine({ vipGreetingCount: 18 }));
+    check('vipPersonalLine(count 21) vuelve a las perras (rotación, 7 variantes)', /Mila y Bruna/.test(daniela.vipPersonalLine({ vipGreetingCount: 21 })), daniela.vipPersonalLine({ vipGreetingCount: 21 }));
+    check('vipWarmGreeting(count 15) menciona al América', /América/.test(daniela.vipWarmGreeting({ vipGreetingCount: 15 })), daniela.vipWarmGreeting({ vipGreetingCount: 15 }));
+    check('vipWarmGreeting(count 18) menciona a los equipos ingleses', /Manchester United/.test(daniela.vipWarmGreeting({ vipGreetingCount: 18 })) && /Tottenham/.test(daniela.vipWarmGreeting({ vipGreetingCount: 18 })), daniela.vipWarmGreeting({ vipGreetingCount: 18 }));
+
+    // (k-a) Ricky "hola Dani" (primer mensaje): saludo VIP con su nombre y
+    // las perras (saludo #1, con línea personal), sin límite ni aviso.
+    mark = sent.length;
+    await incoming(RICKY, 'hola Dani');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    console.log('\n(k-a) Ricky "hola Dani" (primer mensaje):');
+    check('lo saluda como Ricky ("¡Hola Ricky! Qué gusto saludarte")', hasText(m, /¡Hola Ricky! Qué gusto saludarte, ¿en qué te puedo ayudar\?/));
+    check('saludo #1 pregunta por Mila y Bruna', hasText(m, /Mila y Bruna/));
+    check('el nombre es "Ricky"', st && st.name === 'Ricky', `name=${st && st.name}`);
+    check('el trato es "Ricky"', st && st.preferredName === 'Ricky', `preferredName=${st && st.preferredName}`);
+    check('le habla de tú (trato personal)', st && st.formality === 'tu', `formality=${st && st.formality}`);
+    check('contador de saludos VIP = 1', st && st.vipGreetingCount === 1, `vipGreetingCount=${st && st.vipGreetingCount}`);
+    check('NO es la redirección de acoso', !hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones/));
+    check('NO incrementa obsceneCount', !st || st.obsceneCount === 0, `obsceneCount=${st && st.obsceneCount}`);
+    check('NO avisa a Pedro por límite', kNoticesSince(mark).length === 0, JSON.stringify(kNoticesSince(mark)));
+
+    // (k-e) Cadencia: saludos #2..#10 con un simple "hola". La línea
+    // personal solo aparece en 1 de cada 3 (saludos #4, #7 y #10) y rota:
+    // #4 y #7 son las perras, #10 es el pádel. Los demás, solo el saludo.
+    const greetings = [];
+    for (let i = 2; i <= 10; i += 1) {
+      mark = sent.length;
+      await incoming(RICKY, 'hola');
+      greetings.push(texts(since(mark, RICKY)).join(' '));
+    }
+    st = readState(RICKY);
+    const hasPersonal = (s) => /Mila|Bruna|pádel|bici|scooter/.test(s);
+    console.log('\n(k-e) Cadencia de la línea personal (saludos #2..#10):');
+    check('los 9 saludos son cálidos y personales', greetings.every((g) => /¡Hola Ricky! Qué gusto saludarte/.test(g)), JSON.stringify(greetings));
+    check('saludo #4 saluda a Mila y Bruna', hasPersonal(greetings[2]) && /Mila y Bruna/.test(greetings[2]), greetings[2]);
+    check('saludo #7 pregunta por sus niñas', /tus niñas, Mila y Bruna/.test(greetings[5]), greetings[5]);
+    check('saludo #10 pregunta por el pádel', /pádel/.test(greetings[8]), greetings[8]);
+    check('saludos #2, #3, #5, #6, #8 y #9 NO llevan línea personal', [0, 1, 3, 4, 6, 7].every((idx) => !hasPersonal(greetings[idx])), JSON.stringify(greetings));
+    check('contador de saludos VIP = 10', st && st.vipGreetingCount === 10, `vipGreetingCount=${st && st.vipGreetingCount}`);
+
+    // (k-b) Ricky dice otro nombre ("hola Dani, soy Ricardo"): sigue siendo
+    // "Ricky" para Daniela, en el estado y en el saludo.
+    mark = sent.length;
+    await incoming(RICKY, 'hola Dani, soy Ricardo');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    console.log('\n(k-b) Ricky dice otro nombre ("hola Dani, soy Ricardo"):');
+    check('el nombre sigue siendo "Ricky" (no "Ricardo")', st && st.name === 'Ricky', `name=${st && st.name}`);
+    check('lo saluda como Ricky', hasText(m, /Mucho gusto, Ricky/));
+    check('NO lo saluda como Ricardo', !hasText(m, /Mucho gusto, Ricardo/));
+    // Llevarlo a 'main' para las pruebas de coqueteo y negocio.
+    await incoming(RICKY, 'de tú');
+    await incoming(RICKY, 'rroach@medicabiozone.com, WhatsApp al mismo número');
+    st = readState(RICKY);
+    check('llega a main con el nombre "Ricky"', st && st.stage === 'main' && st.name === 'Ricky', `stage=${st && st.stage} name=${st && st.name}`);
+
+    // (k-c) Cariños y piropos de Ricky en 'main': respuesta cálida, sin
+    // límite y sin aviso a Pedro. La rotación sigue: "me gustas" es el
+    // saludo #13 y trae la línea de la bici/scooter.
+    console.log('\n(k-c) Cariños y piropos de Ricky ("hola mi amor", "eres hermosa", "me gustas"):');
+    mark = sent.length;
+    await incoming(RICKY, 'hola mi amor');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('"hola mi amor": responde cálida como Ricky', hasText(m, /¡Hola Ricky! Qué gusto saludarte/));
+    check('"hola mi amor": NO es la redirección de acoso', !hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones/));
+    check('"hola mi amor": NO avisa a Pedro', kNoticesSince(mark).length === 0);
+    check('"hola mi amor": NO incrementa obsceneCount', !st || st.obsceneCount === 0, `obsceneCount=${st && st.obsceneCount}`);
+    mark = sent.length;
+    await incoming(RICKY, 'eres hermosa');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('"eres hermosa": responde cálida como Ricky', hasText(m, /¡Hola Ricky! Qué gusto saludarte/));
+    check('"eres hermosa": NO es la redirección de acoso', !hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones/));
+    check('"eres hermosa": NO avisa a Pedro', kNoticesSince(mark).length === 0);
+    check('"eres hermosa": NO incrementa obsceneCount', !st || st.obsceneCount === 0, `obsceneCount=${st && st.obsceneCount}`);
+    mark = sent.length;
+    await incoming(RICKY, 'me gustas');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('"me gustas": responde cálida como Ricky', hasText(m, /¡Hola Ricky! Qué gusto saludarte/));
+    check('"me gustas": saludo #13 trae la línea de la bici/scooter', hasText(m, /bici| scooter/));
+    check('"me gustas": NO es la redirección de acoso', !hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones/));
+    check('"me gustas": NO avisa a Pedro', kNoticesSince(mark).length === 0);
+    check('"me gustas": NO incrementa obsceneCount', !st || st.obsceneCount === 0, `obsceneCount=${st && st.obsceneCount}`);
+
+    // (k-f) El negocio sigue igual con Ricky: base de conocimiento, demo y
+    // video de despedida con "Ricky".
+    console.log('\n(k-f) El negocio sigue igual con Ricky:');
+    mark = sent.length;
+    await incoming(RICKY, '¿qué es un beacon?');
+    m = since(mark, RICKY);
+    check('responde la pregunta de tecnología (beacons)', hasText(m, /beacon/i));
+    check('NO avisa a Pedro por una pregunta de negocio', kNoticesSince(mark).length === 0, JSON.stringify(kNoticesSince(mark)));
+    mark = sent.length;
+    await incoming(RICKY, 'quiero agendar una demo');
+    m = since(mark, RICKY);
+    check('la demo pide la empresa (no el nombre, que ya es Ricky)', hasText(m, /¿De qué empresa nos escribe\?/));
+    check('NO vuelve a pedir el nombre', !hasText(m, /nombre/i), JSON.stringify(texts(m)));
+    mark = sent.length;
+    await incoming(RICKY, 'Soy Ricky de la empresa Medicabiozone');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    const reqK = readFarewellRequest(RICKY);
+    check('la empresa queda guardada', st && st.company === 'Medicabiozone', `company=${st && st.company}`);
+    check('el nombre sigue siendo "Ricky"', st && st.name === 'Ricky', `name=${st && st.name}`);
+    check('pregunta día/hora como Ricky', hasText(m, /Gracias, Ricky\. ¿Qué día y hora te conviene para la demostración\?/));
+    check('la solicitud de video es para "Ricky"', !!reqK && reqK.kind === 'person' && reqK.name === 'Ricky', `request=${reqK && JSON.stringify(reqK)}`);
+    check('el archivo del video es despedida-ricky.mp4', !!reqK && reqK.file === 'despedida-ricky.mp4', `file=${reqK && reqK.file}`);
+    await incoming(RICKY, 'mañana a las 10');
+    st = readState(RICKY);
+    check('el pendiente de despedida es para "Ricky"', !!st && !!st.farewellPending && st.farewellPending.kind === 'person' && st.farewellPending.name === 'Ricky', `farewellPending=${st && JSON.stringify(st.farewellPending)}`);
+
+    // (k-d) Control: las mismas frases de OTRA persona SÍ activan el límite
+    // como antes; y la obscenidad genuina de Ricky TAMBIÉN activa el límite.
+    const OTHER = '521111000060';
+    mark = sent.length;
+    await incoming(OTHER, 'eres hermosa');
+    m = since(mark, OTHER);
+    st = readState(OTHER);
+    console.log('\n(k-d) Control: otra persona y obscenidad genuina de Ricky:');
+    check('otra persona "eres hermosa": redirección (LIMIT_OBSCENE)', hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones\. ¿En qué le puedo ayudar con eso\?/));
+    check('otra persona "eres hermosa": avisa a Pedro', kNoticesSince(mark).length > 0);
+    check('otra persona: obsceneCount = 1', st && st.obsceneCount === 1, `obsceneCount=${st && st.obsceneCount}`);
+    mark = sent.length;
+    await incoming(OTHER, 'me gustas');
+    m = since(mark, OTHER);
+    st = readState(OTHER);
+    check('otra persona "me gustas": silencio (segunda vez)', replies(m).length === 0, JSON.stringify(replies(m)));
+    check('otra persona "me gustas": avisa a Pedro', kNoticesSince(mark).length > 0);
+    check('otra persona: obsceneCount = 2', st && st.obsceneCount === 2, `obsceneCount=${st && st.obsceneCount}`);
+    mark = sent.length;
+    await incoming(RICKY, 'eres un pendejo');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('Ricky "eres un pendejo": SÍ activa el límite (obscenidad genuina)', hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones\. ¿En qué le puedo ayudar con eso\?/));
+    check('Ricky "eres un pendejo": avisa a Pedro', kNoticesSince(mark).length > 0);
+    check('Ricky: obsceneCount = 1', st && st.obsceneCount === 1, `obsceneCount=${st && st.obsceneCount}`);
+    check('Ricky sigue siendo "Ricky" tras el límite', st && st.name === 'Ricky', `name=${st && st.name}`);
+
+    // (k-g) Fútbol: la rotación incluye al América y a los equipos ingleses.
+    // Ricky está en 'main' tras (k-d). Se lleva el contador hasta el
+    // siguiente saludo con línea de fútbol (variante 5 = América, count ≡ 15
+    // mod 21; variante 6 = equipos ingleses, count ≡ 18 mod 21) y se
+    // comprueba que el saludo real menciona el fútbol. Son preguntas
+    // abiertas: Daniela nunca afirma un resultado (no tiene marcadores).
+    console.log('\n(k-g) Fútbol: el saludo menciona al América y a los equipos ingleses:');
+    async function advanceVipCountTo(target) {
+      let cur = (readState(RICKY) || {}).vipGreetingCount || 0;
+      while (cur < target) {
+        await incoming(RICKY, 'hola');
+        cur = (readState(RICKY) || {}).vipGreetingCount || 0;
+      }
+    }
+    let targetAmerica = (readState(RICKY) || {}).vipGreetingCount || 0;
+    while (targetAmerica % 21 !== 15) targetAmerica += 1;
+    await advanceVipCountTo(targetAmerica);
+    mark = sent.length;
+    await incoming(RICKY, 'hola');
+    m = since(mark, RICKY);
+    check('el saludo con línea de fútbol pregunta por el América', hasText(m, /¿Cómo le fue al América\?/), JSON.stringify(texts(m)));
+    check('el saludo de fútbol sigue siendo cálido ("¡Hola Ricky!")', hasText(m, /¡Hola Ricky! Qué gusto saludarte/));
+    let targetEnglish = (readState(RICKY) || {}).vipGreetingCount || 0;
+    while (targetEnglish % 21 !== 18) targetEnglish += 1;
+    await advanceVipCountTo(targetEnglish);
+    mark = sent.length;
+    await incoming(RICKY, 'hola');
+    m = since(mark, RICKY);
+    check('el saludo con línea de fútbol pregunta por el Manchester United y el Tottenham', hasText(m, /¿Ganaron el Manchester United y el Tottenham\?/), JSON.stringify(texts(m)));
+    check('el saludo de fútbol inglés sigue siendo cálido ("¡Hola Ricky!")', hasText(m, /¡Hola Ricky! Qué gusto saludarte/));
+
+    // (k-h) Nombre completo prohibido: "Richard William Roach Sánchez"
+    // NUNCA se usa para dirigirse a Ricky, aunque él lo escriba. Daniela
+    // siempre le dice "Ricky". Se prueba a nivel unitario (isVipForbiddenName
+    // y vipSafeParsedName) y en los tres puntos de captura del nombre
+    // (primer mensaje, 'awaiting_name_company' y 'demo_capture').
+    console.log('\n(k-h) Nombre completo prohibido ("Richard William Roach Sánchez"):');
+    check('isVipForbiddenName("Richard William Roach Sánchez") = true', daniela.isVipForbiddenName('Richard William Roach Sánchez') === true);
+    check('isVipForbiddenName("Richard William Roach") = true (parseo a 3 palabras)', daniela.isVipForbiddenName('Richard William Roach') === true);
+    check('isVipForbiddenName("Richard William") = true (parseo a 2 palabras)', daniela.isVipForbiddenName('Richard William') === true);
+    check('isVipForbiddenName("Ricardo") = false', daniela.isVipForbiddenName('Ricardo') === false);
+    check('isVipForbiddenName("Ricardo Roach") = false', daniela.isVipForbiddenName('Ricardo Roach') === false);
+    check('isVipForbiddenName("Ricky") = false', daniela.isVipForbiddenName('Ricky') === false);
+    check('isVipForbiddenName("") = false', daniela.isVipForbiddenName('') === false);
+    check('isVipForbiddenName(null) = false', daniela.isVipForbiddenName(null) === false);
+    check('vipSafeParsedName(RICKY, "Richard William Roach") = "Ricky"', daniela.vipSafeParsedName(RICKY, 'Richard William Roach') === 'Ricky');
+    check('vipSafeParsedName(RICKY, "Ricardo") = "Ricardo" (solo se reemplaza el prohibido)', daniela.vipSafeParsedName(RICKY, 'Ricardo') === 'Ricardo');
+    check('vipSafeParsedName(OTHER, "Richard William Roach") no cambia (solo aplica a Ricky)', daniela.vipSafeParsedName(OTHER, 'Richard William Roach') === 'Richard William Roach');
+    check('config.vipRicky.forbiddenFullName = "Richard William Roach Sánchez"', config.vipRicky && config.vipRicky.forbiddenFullName === 'Richard William Roach Sánchez');
+    check('config.vipRicky.football.team = "América"', config.vipRicky && config.vipRicky.football && config.vipRicky.football.team === 'América');
+    check('config.vipRicky.football.englishTeams incluye Manchester United y Tottenham', config.vipRicky && config.vipRicky.football && Array.isArray(config.vipRicky.football.englishTeams) && config.vipRicky.football.englishTeams.includes('Manchester United') && config.vipRicky.football.englishTeams.includes('Tottenham'));
+
+    // Resetea la conversación de Ricky (borra su estado y su solicitud de
+    // despedida): vuelve a 'new' con el contador en 0.
+    function resetRickyState() {
+      const f = path.join(tmpDir, `${RICKY}.json`);
+      if (fs.existsSync(f)) fs.unlinkSync(f);
+      const req = path.join(tmpDir, `despedida-pendiente-${RICKY}.json`);
+      if (fs.existsSync(req)) fs.unlinkSync(req);
+    }
+
+    // Escenario 1: primer mensaje con el nombre completo.
+    resetRickyState();
+    mark = sent.length;
+    await incoming(RICKY, 'Hola, soy Richard William Roach Sánchez');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('primer mensaje con el nombre completo: lo saluda como Ricky', hasText(m, /Mucho gusto, Ricky/));
+    check('primer mensaje con el nombre completo: NO dice "Richard"', !hasText(m, /Richard/));
+    check('primer mensaje con el nombre completo: NO dice "William"', !hasText(m, /William/));
+    check('primer mensaje con el nombre completo: NO dice "Roach"', !hasText(m, /Roach/));
+    check('primer mensaje con el nombre completo: el nombre es "Ricky"', st && st.name === 'Ricky', `name=${st && st.name}`);
+    check('primer mensaje con el nombre completo: el trato es "Ricky"', st && st.preferredName === 'Ricky', `preferredName=${st && st.preferredName}`);
+
+    // Escenario 2: en 'awaiting_name_company' ("Me llamo Richard William
+    // Roach Sánchez").
+    resetRickyState();
+    await incoming(RICKY, 'hola Dani');
+    st = readState(RICKY);
+    check('preparación: tras "hola Dani" está en awaiting_name_company', st && st.stage === 'awaiting_name_company', `stage=${st && st.stage}`);
+    mark = sent.length;
+    await incoming(RICKY, 'Me llamo Richard William Roach Sánchez');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('"Me llamo Richard William Roach Sánchez": lo saluda como Ricky', hasText(m, /Mucho gusto, Ricky/));
+    check('"Me llamo Richard William Roach Sánchez": NO dice "Richard"', !hasText(m, /Richard/));
+    check('"Me llamo Richard William Roach Sánchez": NO dice "William"', !hasText(m, /William/));
+    check('"Me llamo Richard William Roach Sánchez": el nombre es "Ricky"', st && st.name === 'Ricky', `name=${st && st.name}`);
+
+    // Escenario 3: en 'demo_capture' ("Richard William Roach Sánchez").
+    // Se llega por el flujo normal: 'de tú' → correo → 'quiero agendar
+    // una demo' (pide la empresa) → el nombre completo.
+    await incoming(RICKY, 'de tú');
+    await incoming(RICKY, 'rroach@medicabiozone.com, WhatsApp al mismo número');
+    mark = sent.length;
+    await incoming(RICKY, 'quiero agendar una demo');
+    m = since(mark, RICKY);
+    check('preparación: la demo pide la empresa (no el nombre)', hasText(m, /¿De qué empresa nos escribe\?/));
+    mark = sent.length;
+    await incoming(RICKY, 'Richard William Roach Sánchez');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('"Richard William Roach Sánchez" en demo_capture: le agradece como Ricky', hasText(m, /Gracias, Ricky\. ¿Qué día y hora te conviene para la demostración\?/));
+    check('"Richard William Roach Sánchez" en demo_capture: NO dice "Richard"', !hasText(m, /Richard/));
+    check('"Richard William Roach Sánchez" en demo_capture: NO dice "William"', !hasText(m, /William/));
+    check('"Richard William Roach Sánchez" en demo_capture: el nombre es "Ricky"', st && st.name === 'Ricky', `name=${st && st.name}`);
+
+    // ---------- (l) Notas de voz con Groq Whisper gratis (v3.5, 2026-11-11)
+    // Prioridad: Groq > OpenAI > pedir que escriban. Se espía global.fetch
+    // (sin red real) y se hace que downloadMedia sí cree el archivo temporal,
+    // para que la transcripción llegue a llamar al proveedor.
+    const realFetch = global.fetch;
+    const fetchCalls = [];
+    global.fetch = async (url, opts) => {
+      fetchCalls.push({
+        url,
+        model: opts && opts.body && typeof opts.body.get === 'function' ? opts.body.get('model') : null,
+        language: opts && opts.body && typeof opts.body.get === 'function' ? opts.body.get('language') : null,
+        auth: opts && opts.headers ? opts.headers.Authorization : null,
+      });
+      return { ok: true, json: async () => ({ text: 'Hola' }) };
+    };
+    const realDownloadMedia = wa.downloadMedia;
+    wa.downloadMedia = async (id, dest) => { fs.writeFileSync(dest, Buffer.from('audio de prueba')); return dest; };
+
+    // (l-a) Con clave de Groq (aunque también haya de OpenAI) -> usa Groq.
+    config.groqApiKey = 'gsk_test_groq_123';
+    config.openaiApiKey = 'sk-test-openai-456';
+    const GROQ = '521111000013';
+    mark = sent.length;
+    await incomingAudio(GROQ);
+    m = since(mark, GROQ);
+    console.log('\n(l) Notas de voz con Groq (v3.5):');
+    check('con Groq: llama al endpoint de Groq', fetchCalls.some((c) => c.url === 'https://api.groq.com/openai/v1/audio/transcriptions'), JSON.stringify(fetchCalls.map((c) => c.url)));
+    check('con Groq: usa el modelo whisper-large-v3', fetchCalls.some((c) => c.model === 'whisper-large-v3'), JSON.stringify(fetchCalls.map((c) => c.model)));
+    check('con Groq: idioma español', fetchCalls.some((c) => c.language === 'es'));
+    check('con Groq: autoriza con la clave de Groq', fetchCalls.some((c) => c.auth === 'Bearer gsk_test_groq_123'), JSON.stringify(fetchCalls.map((c) => c.auth)));
+    check('con Groq: NO llama a OpenAI aunque haya clave', !fetchCalls.some((c) => c.url === 'https://api.openai.com/v1/audio/transcriptions'));
+    check('con Groq: procesa el texto transcrito (saludo de Daniela)', hasText(m, /soy Daniela/i), JSON.stringify(texts(m)));
+    check('con Groq: NO pide que escriban', !hasText(m, /no puedo escuchar notas de voz/));
+
+    // (l-b) Sin Groq pero con OpenAI -> usa OpenAI (whisper-1) como antes.
+    fetchCalls.length = 0;
+    config.groqApiKey = '';
+    config.openaiApiKey = 'sk-test-openai-456';
+    const OAI = '521111000014';
+    mark = sent.length;
+    await incomingAudio(OAI);
+    m = since(mark, OAI);
+    console.log('    (sin Groq, con OpenAI):');
+    check('sin Groq: llama al endpoint de OpenAI', fetchCalls.some((c) => c.url === 'https://api.openai.com/v1/audio/transcriptions'), JSON.stringify(fetchCalls.map((c) => c.url)));
+    check('sin Groq: usa el modelo whisper-1', fetchCalls.some((c) => c.model === 'whisper-1'), JSON.stringify(fetchCalls.map((c) => c.model)));
+    check('sin Groq: autoriza con la clave de OpenAI', fetchCalls.some((c) => c.auth === 'Bearer sk-test-openai-456'));
+    check('sin Groq: NO llama a Groq', !fetchCalls.some((c) => c.url === 'https://api.groq.com/openai/v1/audio/transcriptions'));
+    check('sin Groq: procesa el texto transcrito (saludo de Daniela)', hasText(m, /soy Daniela/i));
+    check('sin Groq: NO pide que escriban', !hasText(m, /no puedo escuchar notas de voz/));
+
+    // (l-c) Sin ninguna clave -> pide que escriban y NO llama a ningún proveedor.
+    fetchCalls.length = 0;
+    config.groqApiKey = '';
+    config.openaiApiKey = '';
+    const SIN = '521111000015';
+    mark = sent.length;
+    await incomingAudio(SIN);
+    m = since(mark, SIN);
+    console.log('    (sin ninguna clave):');
+    check('sin claves: pide amablemente que escriban', hasText(m, /Perdón, ahorita no puedo escuchar notas de voz\. ¿Me lo puedes escribir, por favor\? Así te atiendo mejor\./));
+    check('sin claves: NO llama a ningún proveedor', fetchCalls.length === 0, `${fetchCalls.length} llamadas`);
+    check('sin claves: sí responde (no se queda callada)', replies(m).length > 0);
+
+    // Restaurar stubs y claves.
+    global.fetch = realFetch;
+    wa.downloadMedia = realDownloadMedia;
+    config.groqApiKey = '';
+    config.openaiApiKey = '';
 
     // ---------- Sin botones en todo el flujo inteligente
     const buttons = sent.filter((s) => s.kind === 'buttons');

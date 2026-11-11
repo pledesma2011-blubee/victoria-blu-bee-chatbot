@@ -65,6 +65,10 @@ SMTP_PASS=
 SMTP_FROM=Daniela <daniela@blubeetech.com.mx>
 
 # Transcripción de notas de voz (opcional)
+# Principal: Groq (gratis, sin tarjeta) — clave en console.groq.com (API Keys).
+# Respaldo: OpenAI (whisper-1) — solo se usa si no hay clave de Groq.
+GROQ_API_KEY=
+OPENAI_API_KEY=
 TRANSCRIBE_CMD=python3 transcribe.py
 ```
 
