@@ -385,6 +385,96 @@ function cleanupVideos() {
         && !/Facebook: https/.test(links) && !/TikTok: https/.test(links) && !/YouTube: https/.test(links);
     })(), daniela.socialLinksMessage().replace(/\n/g, ' | '));
 
+    // ---------- (h) Diminutivos y cariños con los que le hablan a Daniela (v3.1)
+    // Caso real: Ricardo Roach saludó "hola Dani".
+    // Avisos a Pedro (notifyPeter) llegan como texto a PETER con el prefijo 🔔.
+    function peterNoticesSince(mark2) {
+      return sent.slice(mark2).filter((s) => s.to === PETER && s.body.startsWith('🔔'));
+    }
+    console.log('\n(h) Diminutivos y cariños dirigidos a Daniela:');
+    check('isAffectionateGreeting("hola Dani") = true', daniela.isAffectionateGreeting('hola Dani') === true);
+    check('isAffectionateGreeting("hola preciosa") = true', daniela.isAffectionateGreeting('hola preciosa') === true);
+    check('isAffectionateGreeting("hola corazón") = true', daniela.isAffectionateGreeting('hola corazón') === true);
+    check('isAffectionateGreeting("hola linda") = true', daniela.isAffectionateGreeting('hola linda') === true);
+    check('isAffectionateGreeting("Dani, soy Ricardo") = true', daniela.isAffectionateGreeting('Dani, soy Ricardo') === true);
+    check('isAffectionateGreeting("eres hermosa") = false (piropo, sigue el límite)', daniela.isAffectionateGreeting('eres hermosa') === false);
+    check('isAffectionateGreeting("hola, qué guapa") = false (piropo)', daniela.isAffectionateGreeting('hola, qué guapa') === false);
+    check('isAffectionateGreeting("me gustas") = false (coqueteo explícito)', daniela.isAffectionateGreeting('me gustas') === false);
+    check('isAffectionateGreeting("hola, ¿qué es un beacon?") = false (sin cariño)', daniela.isAffectionateGreeting('hola, ¿qué es un beacon?') === false);
+    check('parseNameCompany("hola Dani, soy Ricardo").name = "Ricardo"', daniela.parseNameCompany('hola Dani, soy Ricardo').name === 'Ricardo');
+    check('parseNameCompany("Dani, soy Ricardo").name = "Ricardo"', daniela.parseNameCompany('Dani, soy Ricardo').name === 'Ricardo');
+    check('parseNameCompany("hola preciosa, soy María").name = "María"', daniela.parseNameCompany('hola preciosa, soy María').name === 'María');
+    check('parseNameCompany("soy Reina").name = "Reina" (nombre real, no se quita)', daniela.parseNameCompany('soy Reina').name === 'Reina');
+    check('parseNameCompany("Reina").name = "Reina" (sola, sin saludo ni coma)', daniela.parseNameCompany('Reina').name === 'Reina');
+    check('parseNameCompany("hola, soy Cielo").name = "Cielo"', daniela.parseNameCompany('hola, soy Cielo').name === 'Cielo');
+    check('parseNameCompany("hola Daniela soy Ana").name sigue = "Ana"', daniela.parseNameCompany('hola Daniela soy Ana').name === 'Ana');
+
+    // (h-a) "hola Dani" -> saludo normal, cálido y profesional, NO acoso.
+    const HD = '521111000030';
+    mark = sent.length;
+    await incoming(HD, 'hola Dani');
+    m = since(mark, HD);
+    st = readState(HD);
+    console.log('\n(h-a) "hola Dani" (primer mensaje):');
+    check('responde con calidez ("Mucho gusto, soy Daniela")', hasText(m, /¡Hola! Mucho gusto, soy Daniela, la asistente virtual de Blü Bee Technologies\. ¿En qué te puedo ayudar\?/));
+    check('NO es la redirección de acoso', !hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones/));
+    check('NO incrementa obsceneCount', !st || st.obsceneCount === 0, `obsceneCount=${st && st.obsceneCount}`);
+    check('NO avisa a Pedro por límite', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+
+    // (h-b) "hola Dani, soy Ricardo" -> nombre "Ricardo".
+    const HR = '521111000031';
+    mark = sent.length;
+    await incoming(HR, 'hola Dani, soy Ricardo');
+    m = since(mark, HR);
+    st = readState(HR);
+    console.log('\n(h-b) "hola Dani, soy Ricardo":');
+    check('el nombre es "Ricardo" (no "Dani")', st && st.name === 'Ricardo', `name=${st && st.name}`);
+    check('lo saluda por su nombre', hasText(m, /Mucho gusto, Ricardo/));
+    check('NO toma "Dani" como nombre', !/Mucho gusto, Dani/.test(texts(m).join(' ')));
+
+    // (h-c) "hola preciosa, ¿me ayudas?" -> respuesta profesional, sin tomar a mal.
+    const HP = '521111000032';
+    mark = sent.length;
+    await incoming(HP, 'hola preciosa, ¿me ayudas?');
+    m = since(mark, HP);
+    st = readState(HP);
+    console.log('\n(h-c) "hola preciosa, ¿me ayudas?":');
+    check('responde (no se queda callada)', replies(m).length > 0);
+    check('NO es la redirección de acoso', !hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones/));
+    check('NO incrementa obsceneCount', !st || st.obsceneCount === 0, `obsceneCount=${st && st.obsceneCount}`);
+    check('NO avisa a Pedro por límite', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+    check('NO coquetea de vuelta ni repite el cariño', !hasText(m, /preciosa/i));
+
+    // (h-d) "hola corazón" -> saludo normal.
+    const HC = '521111000033';
+    mark = sent.length;
+    await incoming(HC, 'hola corazón');
+    m = since(mark, HC);
+    st = readState(HC);
+    console.log('\n(h-d) "hola corazón":');
+    check('responde con calidez ("Mucho gusto, soy Daniela")', hasText(m, /¡Hola! Mucho gusto, soy Daniela/));
+    check('NO es la redirección de acoso', !hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones/));
+    check('NO incrementa obsceneCount', !st || st.obsceneCount === 0, `obsceneCount=${st && st.obsceneCount}`);
+    check('NO avisa a Pedro por límite', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+
+    // (h-e) Coqueteo insistente/explícito sigue activando el límite v2.1.
+    const HF = '521111000034';
+    mark = sent.length;
+    await incoming(HF, 'eres hermosa');
+    m = since(mark, HF);
+    st = readState(HF);
+    console.log('\n(h-e) Coqueteo explícito ("eres hermosa" y luego "me gustas"):');
+    check('primera vez: redirección amable (LIMIT_OBSCENE)', hasText(m, /En Blü Bee atendemos consultas sobre nuestras soluciones\. ¿En qué le puedo ayudar con eso\?/));
+    check('primera vez: avisa a Pedro', peterNoticesSince(mark).length > 0);
+    check('obsceneCount = 1', st && st.obsceneCount === 1, `obsceneCount=${st && st.obsceneCount}`);
+    mark = sent.length;
+    await incoming(HF, 'me gustas');
+    m = since(mark, HF);
+    st = readState(HF);
+    check('segunda vez: silencio (no contesta)', replies(m).length === 0, JSON.stringify(replies(m)));
+    check('segunda vez: avisa a Pedro', peterNoticesSince(mark).length > 0);
+    check('obsceneCount = 2', st && st.obsceneCount === 2, `obsceneCount=${st && st.obsceneCount}`);
+
     // ---------- Sin botones en todo el flujo inteligente
     const buttons = sent.filter((s) => s.kind === 'buttons');
     console.log('\n(verificación global):');

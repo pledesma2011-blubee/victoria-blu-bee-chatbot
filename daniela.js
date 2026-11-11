@@ -20,7 +20,12 @@
 // Pedro con calidez; aprendizaje (preguntas sin respuesta en
 // state/preguntas-sin-respuesta.json); video de despedida personalizado
 // (guion institucional fijo, solo cambia el nombre) con entrega inmediata
-// o diferida. Ver chatbot-whatsapp-blu-bee-diseno.md para el diseño completo.
+// o diferida.
+// Diminutivos y cariños (v3.1, 2026-11-11, caso real: Ricardo Roach saludó
+// "hola Dani"): Daniela entiende que le hablan A ELLA cuando le dicen un
+// diminutivo o un cariño, no lo toma a mal y responde con calidez y
+// profesionalismo. El límite de acoso/coqueteo (v2.1) sigue para insistencia
+// o mensajes explícitamente inapropiados. Ver chatbot-whatsapp-blu-bee-diseno.md para el diseño completo.
 
 const fs = require('fs');
 const path = require('path');
@@ -142,6 +147,11 @@ function saveLead(lead) {
 // frases como nombre ("Quiero saber", "quiero información", "agendar demo").
 const NAME_BLOCK_WORDS = new Set([
   'hola', 'daniela', 'buenas', 'dias', 'tardes', 'noches',
+  // Diminutivos/cariños con los que le hablan a Daniela (v3.1): nunca son
+  // el nombre de la persona. 'linda', 'reina' y 'cielo' NO van aquí: son
+  // nombres reales (Linda, Reina, Cielo) y se quitan solo como vocativo
+  // tras el saludo (ver parseNameCompany, paso 1).
+  'dani', 'preciosa', 'corazon', 'carino', 'hermosa', 'guapa', 'amor', 'nena',
   'quiero', 'necesito', 'busco', 'saber', 'informacion', 'info',
   'demo', 'demostracion', 'precio', 'costo', 'cotizacion', 'agendar',
   'hablar', 'pedro', 'ledesma', 'video', 'ver', 'pasame', 'dame', 'ayuda',
@@ -153,6 +163,31 @@ const NAME_BLOCK_WORDS = new Set([
   'vinedo', 'hotel', 'hospital', 'centro', 'comercial', 'industria',
   'gobierno', 'ciudad', 'inteligente', 'reiniciar',
 ]);
+
+// Diminutivos y cariños con los que la gente se dirige a Daniela (v3.1,
+// caso real 2026-11-11: Ricardo Roach saludó "hola Dani"). Se usan para
+// reconocer que le hablan A ELLA (isAffectionateGreeting) y para quitar el
+// vocativo al extraer el nombre ("hola Dani, soy Ricardo" -> "Ricardo").
+// Normalizados (sin acentos), como los compara normalize().
+const AFFECTIONATE_TERMS = [
+  'dani', 'preciosa', 'corazon', 'carino', 'linda', 'hermosa', 'guapa',
+  'reina', 'amor', 'cielo', 'nena',
+];
+
+// Convierte un término normalizado (sin acentos) en un patrón de regex que
+// también acepta las vocales acentuadas y la ñ ("corazon" casa con
+// "corazón"; "carino" casa con "cariño"). Se usa en parseNameCompany, que
+// trabaja con el texto original (con acentos, para no perderlos en nombres
+// como "María").
+function accentInsensitive(term) {
+  return term
+    .replace(/a/g, '[aáàä]')
+    .replace(/e/g, '[eéèë]')
+    .replace(/i/g, '[iíìï]')
+    .replace(/o/g, '[oóòö]')
+    .replace(/u/g, '[uúùü]')
+    .replace(/n/g, '[nñ]');
+}
 
 // Guardia: ¿puede este texto ser un nombre de persona?
 // Con afterMarker=true (tras "soy / me llamo / mi nombre es") se permiten
@@ -217,8 +252,19 @@ function looksLikeCompanyName(company) {
 function parseNameCompany(text) {
   let t = (text || '').trim();
   // 1. Quitar saludos iniciales y el nombre del bot ("Daniela") donde aparezca.
+  //    También el diminutivo/cariño con el que le hablan a Daniela ("Dani",
+  //    "preciosa", "corazón", ...) cuando va como vocativo: tras el saludo
+  //    ("hola Dani, soy Ricardo") o seguido de coma ("Dani, soy Ricardo").
+  //    No se quita si puede ser el nombre de la persona: "soy Reina" sigue
+  //    dando "Reina", y "Reina" sola tampoco se toca (sin saludo ni coma).
+  const hadGreeting = /^(hola|buenas|buenos dias|buenas tardes|buenas noches)[,.!]?\s*/i.test(t);
   t = t.replace(/^(hola|buenas|buenos dias|buenas tardes|buenas noches)[,.!]?\s*/i, '');
   t = t.replace(/\bdaniela\b[,.!]?\s*/gi, '');
+  const vocativePattern = AFFECTIONATE_TERMS.map(accentInsensitive).join('|');
+  const vocativeFollowedByComma = new RegExp(`^(${vocativePattern}),`, 'i').test(t);
+  if (hadGreeting || vocativeFollowedByComma) {
+    t = t.replace(new RegExp(`^(${vocativePattern})[,.!]?\\s*`, 'i'), '');
+  }
   t = t.replace(/^[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+/, '').trim();
   t = t.replace(/^(hola|buenas|buenos dias|buenas tardes|buenas noches)[,.!]?\s*/i, '').trim();
 
@@ -493,6 +539,44 @@ function looksGeneralTask(text) {
   return matchesAny(text, GENERAL_PATTERNS) || matchesAny(text, GENERAL_WORDS);
 }
 
+// ---------- diminutivos y cariños con los que le hablan a Daniela (v3.1) ----------
+// Caso real (2026-11-11): Ricardo Roach saludó "hola Dani". La gente le
+// habla a Daniela con diminutivos o cariños ("Dani", "preciosa", "corazón",
+// "linda", "hermosa", "guapa", "reina", "amor", "cielo", "nena").
+// Daniela lo entiende como que le hablan A ELLA: no lo toma a mal y
+// responde con calidez y profesionalismo. NO es acoso por sí solo: el
+// límite v2.1 sigue para insistencia o mensajes explícitamente inapropiados.
+
+// Coqueteo explícito (construcciones, no el término solo): "eres hermosa",
+// "qué guapa", "me gustas", "te amo", "mándame tu foto"... Si el mensaje
+// trae una de estas (o una grosería), NO es un saludo inocente: aplica el
+// límite v2.1 como siempre.
+const EXPLICIT_FLIRT_PHRASES = [
+  'me gustas', 'eres guapa', 'eres hermosa', 'que guapa', 'que hermosa',
+  'te amo', 'quiero conocerte', 'estas soltera', 'tienes novio',
+  'mandame tu foto', 'mandame una foto', 'foto tuya',
+  'te invito a salir', 'que bonita eres', 'eres bonita', 'estas muy guapa',
+  'que guapa eres', 'estas hermosa', 'me encantas', 'dame tu numero personal',
+  'tu numero personal', 'enseñame tu cuerpo', 'manda foto de tus',
+];
+
+// ¿Es un saludo cariñoso dirigido a Daniela? ("hola Dani", "hola preciosa",
+// "hola corazón"). Reglas: trae un término cariñoso; NO trae coqueteo
+// explícito ni groserías; y parece un saludo (empieza con saludo o con el
+// término). "eres hermosa" o "qué guapa eres" NO cuentan: son piropos sobre
+// su apariencia y siguen bajo el límite v2.1.
+function isAffectionateGreeting(text) {
+  const norm = normalize(text);
+  if (!norm) return false;
+  if (matchesAny(text, EXPLICIT_FLIRT_PHRASES) || matchesAny(text, OBSCENE_WORDS)) return false;
+  const hasTerm = AFFECTIONATE_TERMS.some((t) => new RegExp(`\\b${t}\\b`).test(norm));
+  if (!hasTerm) return false;
+  const first = norm.split(' ')[0];
+  const startsWithGreeting = /^(hola|buenas|buenos|que tal|buen dia)\b/.test(norm);
+  const startsWithTerm = AFFECTIONATE_TERMS.includes(first);
+  return startsWithGreeting || startsWithTerm;
+}
+
 // Revisa los límites para un mensaje. Se llama DESPUÉS del filtro de estafa
 // y del comando de reinicio de Pedro, y ANTES del flujo normal, así aplica
 // en TODAS las etapas (también mientras espera nombre/empresa/contacto: un
@@ -500,6 +584,11 @@ function looksGeneralTask(text) {
 // el mensaje quedó resuelto por un límite (el flujo normal no debe seguir).
 async function checkLimits(st, text) {
   const from = st.phone;
+
+  // Saludo cariñoso a Daniela ("hola Dani", "hola preciosa", "hola corazón"):
+  // es un saludo normal dirigido a ella, no acoso. No se toma a mal: se deja
+  // pasar al flujo normal, que responde con calidez y profesionalismo.
+  if (isAffectionateGreeting(text)) return false;
 
   // 1) Obscenidades, acoso o contenido sexual.
   if (looksObscene(text)) {
@@ -1200,6 +1289,20 @@ async function handleMessage(msg) {
       }
       return;
     }
+    // Saludo cariñoso a Daniela ("hola Dani", "hola preciosa", "hola corazón"):
+    // respuesta cálida y profesional, sin repetir el diminutivo de vuelta
+    // de forma coqueta y sin sermonear. Solo si no hay una intención de
+    // negocio (demo, precio...): esa se atiende por su flujo normal. El
+    // nombre se captura de forma natural en el siguiente mensaje.
+    if (isAffectionateGreeting(text) && (!firstIntent || firstIntent.kind === 'greeting')) {
+      st.stage = 'awaiting_name_company';
+      saveState(st);
+      await wa.sendText(
+        from,
+        '¡Hola! Mucho gusto, soy Daniela, la asistente virtual de Blü Bee Technologies. ¿En qué te puedo ayudar?'
+      );
+      return;
+    }
     await wa.sendText(
       from,
       'Hola, soy Daniela, la asistente de Blü Bee Technologies. Para atenderle como se merece, ¿me dice su nombre y de qué empresa nos escribe?'
@@ -1684,6 +1787,8 @@ module.exports = {
   looksObscene,
   looksIdentityProbe,
   looksGeneralTask,
+  // Diminutivos y cariños dirigidos a Daniela (v3.1)
+  isAffectionateGreeting,
   // Daniela inteligente (v3)
   detectPersonal,
   handlePersonal,
