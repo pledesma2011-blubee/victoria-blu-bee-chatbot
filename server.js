@@ -159,6 +159,26 @@ app.post('/deliver-banner', async (req, res) => {
   }
 });
 
+// Entrega de un texto a Peter por WhatsApp, vía Daniela.
+//   POST /deliver-text  { "phone": "524421447169", "text": "..." }
+// Para mandarle textos largos (como la descripción del canal) que pueda
+// copiar desde WhatsApp Web en su MacBook. Solo acepta el número de Peter.
+app.post('/deliver-text', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const text = String((req.body && req.body.text) || '');
+    const peter = config.peterWhatsApp || '524421447169';
+    if (phone !== peter) return res.json({ ok: false, reason: 'not-peter' });
+    if (!text) return res.json({ ok: false, reason: 'no-text' });
+    const sent = await wa.sendText(phone, text);
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-text:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Salud del servidor
 app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: 'Blü Bee Technologies' }));
 
