@@ -1198,11 +1198,21 @@ async function transcribeWithProvider(endpoint, model, key, filePath) {
       headers: { Authorization: `Bearer ${key}` },
       body: form,
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // (v3.5.1) Antes el error se tragaba en silencio y los logs quedaban
+      // vacíos: registrar status y un fragmento del body para diagnosticar
+      // (401 = clave inválida, 400 = archivo, 429 = límite). La clave NUNCA
+      // se registra.
+      const body = await res.text().catch(() => '');
+      console.error(`[transcribe] ${new URL(endpoint).host} ${model} HTTP ${res.status}: ${body.slice(0, 200)}`);
+      return null;
+    }
     const data = await res.json().catch(() => ({}));
     const text = (data.text || '').trim();
+    if (!text) console.error(`[transcribe] ${new URL(endpoint).host} ${model}: texto vacío`);
     return text || null;
-  } catch {
+  } catch (e) {
+    console.error(`[transcribe] ${new URL(endpoint).host} ${model}:`, e.message);
     return null;
   }
 }
