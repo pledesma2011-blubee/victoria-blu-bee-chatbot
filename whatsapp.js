@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const config = require('./config');
 
 const GRAPH = `https://graph.facebook.com/${config.graphVersion}`;
@@ -44,12 +45,17 @@ async function graphPost(endpoint, body, isForm = false) {
 // El ID se guarda en state/media-ids.json para no volver a subir el mismo archivo.
 async function uploadMedia(filePath, mimeType) {
   const ids = loadMediaIds();
-  const key = path.resolve(filePath);
+  const buffer = fs.readFileSync(filePath);
+  // La clave incluye el hash del contenido: si el archivo cambia (misma ruta,
+  // nuevo contenido), se vuelve a subir en vez de reutilizar el media ID viejo.
+  // Antes la clave era solo la ruta, así que reemplazar un archivo mandaba la
+  // versión anterior (pasó con la marca de agua el 2026-11-11).
+  const hash = crypto.createHash('md5').update(buffer).digest('hex');
+  const key = path.resolve(filePath) + ':' + hash;
   if (ids[key]) return ids[key];
 
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
-  const buffer = fs.readFileSync(filePath);
   form.append('file', new Blob([buffer], { type: mimeType }), path.basename(filePath));
   form.append('type', mimeType);
 
