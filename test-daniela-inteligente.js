@@ -968,6 +968,87 @@ function cleanupVideos() {
     check('"Richard William Roach Sánchez" en demo_capture: NO dice "William"', !hasText(m, /William/));
     check('"Richard William Roach Sánchez" en demo_capture: el nombre es "Ricky"', st && st.name === 'Ricky', `name=${st && st.name}`);
 
+    // ---------- (k-i) Ricky SIEMPRE recibe respuesta (orden de Peter 2026-11-11)
+    // Daniela siempre le contesta a Ricky, TODO. Caso real: Ricky mandó
+    // solo emojis (corazones y risas) y Daniela no le contestó (se
+    // clasificó como "no es de Blü Bee"). Ahora: los emojis de Ricky
+    // reciben el video de emojis, y cualquier mensaje sin intención clara
+    // recibe una respuesta cálida con contexto, nunca silencio ni aviso
+    // de "no es de Blü Bee". Para los demás contactos, todo sigue igual.
+    console.log('\n(k-i) Ricky SIEMPRE recibe respuesta (emojis y charla casual):');
+    // isEmojiOnly: casos unitarios.
+    check('isEmojiOnly("❤️❤️❤️❤️❤️😂😂😂😂😂") = true (caso real)', daniela.isEmojiOnly('❤️❤️❤️❤️❤️😂😂😂😂😂') === true);
+    check('isEmojiOnly("😂") = true', daniela.isEmojiOnly('😂') === true);
+    check('isEmojiOnly("👍🔥") = true', daniela.isEmojiOnly('👍🔥') === true);
+    check('isEmojiOnly("Hola ❤️") = false (tiene texto)', daniela.isEmojiOnly('Hola ❤️') === false);
+    check('isEmojiOnly("Hola") = false (sin emoji)', daniela.isEmojiOnly('Hola') === false);
+    check('isEmojiOnly("") = false', daniela.isEmojiOnly('') === false);
+    check('isEmojiOnly(null) = false', daniela.isEmojiOnly(null) === false);
+
+    // vipCasualReply: respuestas con contexto.
+    check('vipCasualReply menciona a Mila y Bruna si las nombra', /Mila y Bruna/.test(daniela.vipCasualReply({ phone: RICKY, vipCasualCount: 0 }, 'Mila está muy juguetona')));
+    check('vipCasualReply responde por el pádel si lo nombra', /pádel/.test(daniela.vipCasualReply({ phone: RICKY, vipCasualCount: 0 }, 'hoy jugué pádel')));
+    check('vipCasualReply responde por el fútbol si lo nombra', /fútbol/.test(daniela.vipCasualReply({ phone: RICKY, vipCasualCount: 0 }, 'ganó el América')));
+    check('vipCasualReply genérica menciona a Ricky', /Ricky/.test(daniela.vipCasualReply({ phone: RICKY, vipCasualCount: 0 }, 'qué calor hace')));
+
+    // Llevar a Ricky a 'main' para probar la charla.
+    resetRickyState();
+    await driveToMain(RICKY, 'Soy Ricky de la empresa Medicabiozone');
+    st = readState(RICKY);
+    check('preparación: Ricky está en main', st && st.stage === 'main', `stage=${st && st.stage}`);
+
+    // (k-i-a) Ricky manda solo emojis: recibe el video de emojis, sin aviso a Pedro.
+    mark = sent.length;
+    await incoming(RICKY, '❤️❤️❤️❤️❤️😂😂😂😂😂');
+    m = since(mark, RICKY);
+    check('Ricky solo emojis: recibe el video de emojis', videoFiles(m).some((f) => f.endsWith('daniela-emojis-ricky.mp4')), JSON.stringify(videoFiles(m)));
+    check('Ricky solo emojis: NO avisa a Pedro de "no es de Blü Bee"', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+    check('Ricky solo emojis: NO se registra como pregunta sin respuesta', !readUnanswered().some((q) => /❤️/.test(q.pregunta || '')));
+
+    // (k-i-b) Ricky manda un mensaje casual sin intención: respuesta cálida, sin aviso.
+    mark = sent.length;
+    await incoming(RICKY, 'qué calor hace');
+    m = since(mark, RICKY);
+    check('Ricky charla casual: SÍ recibe respuesta', replies(m).length > 0, JSON.stringify(replies(m)));
+    check('Ricky charla casual: la respuesta menciona a Ricky', hasText(m, /Ricky/), JSON.stringify(texts(m)));
+    check('Ricky charla casual: NO avisa a Pedro de "no es de Blü Bee"', peterNoticesSince(mark).length === 0, JSON.stringify(peterNoticesSince(mark)));
+
+    // (k-i-c) Ricky pregunta "¿eres un robot?": responde (no aplica el límite de identidad).
+    mark = sent.length;
+    await incoming(RICKY, '¿eres un robot?');
+    m = since(mark, RICKY);
+    check('Ricky "¿eres un robot?": SÍ recibe respuesta', replies(m).length > 0, JSON.stringify(replies(m)));
+    check('Ricky "¿eres un robot?": NO es la redirección de identidad', !hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/), JSON.stringify(texts(m)));
+
+    // (k-i-d) Ricky pide algo general ("hazme un poema"): responde (no aplica el límite general).
+    mark = sent.length;
+    await incoming(RICKY, 'hazme un poema');
+    m = since(mark, RICKY);
+    check('Ricky "hazme un poema": SÍ recibe respuesta', replies(m).length > 0, JSON.stringify(replies(m)));
+
+    // (k-i-e) Ricky tras handedOff (pidió hablar con Pedro): sigue recibiendo respuesta.
+    mark = sent.length;
+    await incoming(RICKY, 'Quiero hablar con Pedro');
+    m = since(mark, RICKY);
+    st = readState(RICKY);
+    check('preparación: Ricky quedó en handedOff', st && st.handedOff === true, `handedOff=${st && st.handedOff}`);
+    mark = sent.length;
+    await incoming(RICKY, 'qué calor hace');
+    m = since(mark, RICKY);
+    check('Ricky tras handedOff: SÍ recibe respuesta', replies(m).length > 0, JSON.stringify(replies(m)));
+    check('Ricky tras handedOff: NO dice "ya se le pasó a Pedro"', !notices(since(mark, PETER)).some((n) => /ya se le pasó a Pedro/.test(n)));
+
+    // (k-i-f) Control: OTRA persona manda solo emojis: NO recibe el video
+    // de emojis de Ricky (se trata como antes: aviso a Pedro, sin respuesta).
+    const EMOJI_OTHER = '521111000061';
+    await driveToMain(EMOJI_OTHER, 'Soy Laura de Hotel Paraíso');
+    mark = sent.length;
+    await incoming(EMOJI_OTHER, '❤️❤️😂😂');
+    m = since(mark, EMOJI_OTHER);
+    check('otra persona solo emojis: NO recibe el video de emojis de Ricky', !videoFiles(m).some((f) => f.endsWith('daniela-emojis-ricky.mp4')), JSON.stringify(videoFiles(m)));
+    check('otra persona solo emojis: NO recibe respuesta (como antes)', replies(m).length === 0, JSON.stringify(replies(m)));
+    check('otra persona solo emojis: SÍ avisa a Pedro', peterNoticesSince(mark).length > 0);
+
     // ---------- (l) Notas de voz con Groq Whisper gratis (v3.5, 2026-11-11)
     // Prioridad: Groq > OpenAI > pedir que escriban. Se espía global.fetch
     // (sin red real) y se hace que downloadMedia sí cree el archivo temporal,
@@ -1109,6 +1190,76 @@ function cleanupVideos() {
     console.log('    (perfil de WhatsApp "Daniela", dice "Hola"):');
     check('saludo limpio (sin duplicar)', hasText(m, /Hola, soy Daniela, la asistente de Blü Bee Technologies\. ¿En qué le puedo ayudar\?/));
     check('NO duplica el nombre', !hasText(m, /Hola, Daniela, soy Daniela/));
+
+    // ---------- (n) Foto de perfil de WhatsApp del número de Blü Bee
+    // Flujo de Meta (Resumable Upload API + WhatsApp Business Profile):
+    // POST /{app-id}/uploads -> sesión "upload:<...>"; POST /upload:<...>
+    // con los bytes y Authorization: OAuth -> handle "h"; POST
+    // /{phone-number-id}/whatsapp_business_profile {profile_picture_handle}.
+    // Se espía global.fetch (sin red real) y se usa la foto real
+    // media/daniela-foto-perfil.jpg.
+    console.log('\n(n) Foto de perfil del número de Blü Bee:');
+    const realFetch2 = global.fetch;
+    const profileCalls = [];
+    global.fetch = async (url, opts) => {
+      const bodyText = typeof (opts && opts.body) === 'string' ? opts.body : null;
+      profileCalls.push({
+        url: String(url),
+        method: opts && opts.method,
+        auth: opts && opts.headers ? opts.headers.Authorization : null,
+        fileOffset: opts && opts.headers ? opts.headers.file_offset : null,
+        body: bodyText ? JSON.parse(bodyText) : null,
+        isBuffer: Buffer.isBuffer(opts && opts.body),
+      });
+      if (String(url).includes('/uploads')) {
+        return { ok: true, status: 200, json: async () => ({ id: 'upload:sesion-prueba-123' }) };
+      }
+      if (String(url).includes('/upload:sesion-prueba-123')) {
+        return { ok: true, status: 200, json: async () => ({ h: 'handle-prueba-abc' }) };
+      }
+      if (String(url).includes('/whatsapp_business_profile')) {
+        return { ok: true, status: 200, json: async () => ({ success: true }) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+    const photoPath = path.join(__dirname, 'media', 'daniela-foto-perfil.jpg');
+    const photoSize = fs.statSync(photoPath).size;
+    const setResult = await wa.setProfilePicture(photoPath);
+    check('(n-a) setProfilePicture devuelve success:true', setResult && setResult.success === true, JSON.stringify(setResult));
+    check('(n-a) paso 1: crea la sesión en /{app-id}/uploads', profileCalls.some((c) => c.url === `https://graph.facebook.com/${config.graphVersion}/${config.appId}/uploads`), JSON.stringify(profileCalls.map((c) => c.url)));
+    check('(n-a) paso 1: manda file_name, file_length y file_type', profileCalls.some((c) => c.body && c.body.file_name === 'daniela-foto-perfil.jpg' && c.body.file_length === photoSize && c.body.file_type === 'image/jpeg'), JSON.stringify(profileCalls.map((c) => c.body)));
+    const uploadCall = profileCalls.find((c) => c.url.includes('/upload:sesion-prueba-123'));
+    check('(n-a) paso 2: sube los bytes a /upload:<sesión>', !!uploadCall && uploadCall.isBuffer === true, JSON.stringify(uploadCall && uploadCall.url));
+    check('(n-a) paso 2: autoriza con OAuth (no Bearer) y file_offset 0', !!uploadCall && String(uploadCall.auth).startsWith('OAuth ') && uploadCall.fileOffset === '0', JSON.stringify(uploadCall));
+    const profileCall = profileCalls.find((c) => c.url.includes('/whatsapp_business_profile'));
+    check('(n-a) paso 3: pone profile_picture_handle con el handle', !!profileCall && profileCall.body && profileCall.body.profile_picture_handle === 'handle-prueba-abc', JSON.stringify(profileCall && profileCall.body));
+    check('(n-a) son exactamente 3 llamadas a la API', profileCalls.length === 3, `${profileCalls.length} llamadas`);
+    global.fetch = realFetch2;
+
+    // (n-b) Archivo inexistente -> error claro, sin llamar a la API.
+    let missingErr = null;
+    try {
+      await wa.setProfilePicture(path.join(__dirname, 'media', 'foto-que-no-existe.jpg'));
+    } catch (e) { missingErr = e; }
+    check('(n-b) archivo inexistente: error claro', !!missingErr && /No existe la foto de perfil/.test(missingErr.message), missingErr && missingErr.message);
+
+    // (n-c)/(n-d) Endpoint POST /set-profile-photo: solo Peter.
+    // Se levanta el servidor real en un puerto de prueba y se le pega por
+    // HTTP; setProfilePicture se simula para no tocar la API de Meta.
+    const realSetPhoto = wa.setProfilePicture;
+    wa.setProfilePicture = async () => ({ success: true });
+    config.port = 34000 + Math.floor(Math.random() * 1000);
+    require('./server');
+    await new Promise((r) => setTimeout(r, 300));
+    const postJson = async (p, body) => {
+      const r = await fetch(`http://127.0.0.1:${config.port}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return r.json();
+    };
+    const wrongPhone = await postJson('/set-profile-photo', { phone: '521111000099' });
+    check('(n-c) teléfono que no es Peter: ok:false (not-peter)', wrongPhone && wrongPhone.ok === false && wrongPhone.reason === 'not-peter', JSON.stringify(wrongPhone));
+    const okPhone = await postJson('/set-profile-photo', { phone: PETER });
+    check('(n-d) teléfono de Peter: ok:true', okPhone && okPhone.ok === true, JSON.stringify(okPhone));
+    wa.setProfilePicture = realSetPhoto;
 
     // ---------- Sin botones en todo el flujo inteligente
     const buttons = sent.filter((s) => s.kind === 'buttons');

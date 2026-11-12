@@ -230,6 +230,32 @@ app.post('/deliver-text', async (req, res) => {
   }
 });
 
+// Pone la foto de perfil de WhatsApp del número de Blü Bee (442 461 0323).
+//   POST /set-profile-photo  { "phone": "524421447169" }
+// Sube media/daniela-foto-perfil.jpg por la API de subida reanudable de
+// Meta y la pone como foto de perfil del número con
+// POST /{phone-number-id}/whatsapp_business_profile. Solo acepta el número
+// de Peter, por seguridad. La foto NO se puede poner desde la app de
+// WhatsApp Business (eso volvería a registrar el número y rompería el
+// chatbot). Si el token no tiene el permiso whatsapp_business_management,
+// la API responde 403 y el error se devuelve tal cual.
+app.post('/set-profile-photo', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const peter = config.peterWhatsApp || '524421447169';
+    if (phone !== peter) return res.json({ ok: false, reason: 'not-peter' });
+    const imagePath = path.join(__dirname, 'media', 'daniela-foto-perfil.jpg');
+    if (!fs.existsSync(imagePath)) {
+      return res.json({ ok: false, reason: 'no-image' });
+    }
+    const result = await wa.setProfilePicture(imagePath);
+    return res.json({ ok: true, result });
+  } catch (e) {
+    console.error('Error en /set-profile-photo:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Salud del servidor
 app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: 'Blü Bee Technologies' }));
 

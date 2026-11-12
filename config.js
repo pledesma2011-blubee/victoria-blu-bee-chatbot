@@ -10,6 +10,7 @@ const config = {
   // WhatsApp Cloud API (Meta)
   phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '', // ID del número Business 442 461 0323
   accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',      // Token permanente de la app de Meta
+  appId: process.env.META_APP_ID || '1148884670839349',      // ID de la app de Meta "Blü Bee Technologies" (para la subida reanudable: la foto de perfil se sube a la app, no al número)
   verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || 'victoria-blu-bee', // Lo eliges tú; debe coincidir con Meta
   graphVersion: process.env.WHATSAPP_GRAPH_VERSION || 'v21.0',
 

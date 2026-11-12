@@ -65,6 +65,81 @@ async function uploadMedia(filePath, mimeType) {
   return data.id;
 }
 
+// --- Foto de perfil del número de WhatsApp Business ---
+// Meta exige subir la imagen por la API de subida reanudable (Resumable
+// Upload) para obtener un "handle" y luego referenciarlo en
+// /{phone-number-id}/whatsapp_business_profile como profile_picture_handle.
+// No se puede pasar una URL ni un media_id de /media.
+// Flujo (docs de Meta: Resumable Upload API + WhatsApp Business Profile):
+//   1) POST /{app-id}/uploads {file_name, file_length, file_type}
+//      -> {id: "upload:<sessionId>"}
+//   2) POST /upload:<sessionId> con los bytes, cabecera file_offset: 0 y
+//      Authorization: OAuth <token> -> {h: "<handle>"}
+//   3) POST /{phone-number-id}/whatsapp_business_profile
+//      {profile_picture_handle: "<handle>"} -> {success: true}
+// La subida reanudable pertenece a la app, no al número: por eso el paso 1
+// usa el App ID de Meta (config.appId) y no phoneNumberId. La foto NO se
+// puede poner desde la app de WhatsApp Business (eso volvería a registrar
+// el número y rompería el chatbot).
+
+// Crea una sesión de subida reanudable y devuelve su ID ("upload:<...>").
+async function createResumableUploadSession(fileName, fileLength, fileType) {
+  const url = `${GRAPH}/${config.appId}/uploads`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ file_name: fileName, file_length: fileLength, file_type: fileType }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.id) {
+    throw new Error(`No se pudo crear la sesión de subida reanudable (WhatsApp API ${res.status}): ${JSON.stringify(data)}`);
+  }
+  return data.id;
+}
+
+// Sube los bytes del archivo a la sesión y devuelve el handle ("h").
+async function uploadResumableFile(uploadSessionId, buffer) {
+  const url = `${GRAPH}/${uploadSessionId}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `OAuth ${config.accessToken}`,
+      'Content-Type': 'application/octet-stream',
+      file_offset: '0',
+    },
+    body: buffer,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.h) {
+    throw new Error(`No se pudo subir la foto a la sesión reanudable (WhatsApp API ${res.status}): ${JSON.stringify(data)}`);
+  }
+  return data.h;
+}
+
+// Pone la foto de perfil del número de WhatsApp Business de Blü Bee.
+// filePath: imagen JPEG/PNG local (p. ej. media/daniela-foto-perfil.jpg).
+// Devuelve la respuesta de la API ({success: true}).
+// Errores típicos: el token no tiene el permiso whatsapp_business_management
+// (la API responde 403) o la imagen tiene un formato no admitido.
+async function setProfilePicture(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`No existe la foto de perfil: ${filePath}`);
+  }
+  const buffer = fs.readFileSync(filePath);
+  const fileName = path.basename(filePath);
+  const mimeType = /\.png$/i.test(fileName) ? 'image/png' : 'image/jpeg';
+  const sessionId = await createResumableUploadSession(fileName, buffer.length, mimeType);
+  const handle = await uploadResumableFile(sessionId, buffer);
+  const data = await graphPost('/whatsapp_business_profile', { profile_picture_handle: handle });
+  if (data.success !== true) {
+    throw new Error(`La API no confirmó el cambio de foto de perfil: ${JSON.stringify(data)}`);
+  }
+  return data;
+}
+
 // Descarga un medio de WhatsApp (por ejemplo una nota de voz) a un archivo local.
 async function downloadMedia(mediaId, destPath) {
   const infoRes = await fetch(`${GRAPH}/${mediaId}`, {
@@ -178,4 +253,5 @@ module.exports = {
   sendReaction,
   markRead,
   downloadMedia,
+  setProfilePicture,
 };
