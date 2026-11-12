@@ -26,6 +26,17 @@
 // diminutivo o un cariño, no lo toma a mal y responde con calidez y
 // profesionalismo. El límite de acoso/coqueteo (v2.1) sigue para insistencia
 // o mensajes explícitamente inapropiados. Ver chatbot-whatsapp-blu-bee-diseno.md para el diseño completo.
+// Ricky SIEMPRE recibe respuesta (orden de Peter 2026-11-11): Daniela
+// SIEMPRE le contesta a Ricky, TODO (no solo temas de Blü Bee). Los
+// mensajes sin intención clara no son "no es de Blü Bee" para él: son
+// charla con un amigo y se responden con calidez y contexto (sus perras
+// Mila y Bruna, el pádel, el fútbol), de forma fluida y rápida, como
+// chateando con una persona. Si manda solo emojis, le responde con el
+// video "Me encantan tus emojis, Ricky." Nunca se le aplica el silencio
+// de no-Blü Bee, ni el de handedOff, ni los límites de prueba de identidad
+// y preguntas generales. La obscenidad GENUINA sí sigue el límite para él
+// como para cualquiera (v3.4, §13.11 del diseño). Ver isEmojiOnly,
+// vipCasualReply y el endpoint POST /deliver-ricky-dogs en server.js.
 // Errores de dedo en la marca (v3.2, 2026-11-11, caso real: Ricardo Roach
 // escribió "Que hace blue Bee ?" y Daniela lo clasificó como "que no es de
 // Blü Bee" y no contestó): la marca se normaliza a su forma canónica
@@ -121,6 +132,7 @@ function loadState(phone) {
     farewellIdentity: null, // { kind: 'person'|'company'|'generic', name } usada en la solicitud (v3.3)
     farewellPending: null, // { kind, name, file, requestedAt } si la despedida se hizo sin video (entrega diferida)
     vipGreetingCount: 0, // saludos cálidos VIP dados a Ricky (v3.4): cada 3, uno pregunta por Mila y Bruna
+    vipCasualCount: 0, // respuestas casuales VIP dadas a Ricky (siempre contesta, 2026-11-11): rota las variantes para no sonar repetitiva
     known: false,
     handedOff: false,
   };
@@ -694,6 +706,28 @@ function looksGenuinelyObscene(text) {
   return matchesAny(text, nonFlirt);
 }
 
+// Caracteres emoji (rangos Unicode): emoticonos y símbolos (1F000-1FAFF),
+// símbolos misceláneos y dingbats (2600-27BF, donde vive ❤️ U+2764),
+// estrellas y flechas (2B00-2BFF, 2190-21FF), selector de variación (FE0F,
+// el que convierte ❤ en ❤️) y el joiner de ancho cero (200D, emojis
+// compuestos). Se usa el mismo conjunto para detectar y para quitar.
+const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2190}-\u{21FF}\u{FE0F}\u{200D}]/u;
+const EMOJI_GLOBAL_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2190}-\u{21FF}\u{FE0F}\u{200D}]/gu;
+
+// ¿El mensaje son solo emojis (sin texto)? Ej. "❤️❤️❤️😂😂".
+// Se quitan los emojis, los espacios y la puntuación; si no queda nada y
+// había al menos un emoji, es solo emojis. "Hola ❤️" NO es solo emojis.
+// Caso real 2026-11-11: Ricky mandó solo "❤️❤️❤️❤️❤️😂😂😂😂😂" y Daniela
+// no le contestó (se clasificó como "no es de Blü Bee"). Para Ricky, los
+// emojis SIEMPRE tienen respuesta (el video de emojis).
+function isEmojiOnly(text) {
+  if (!text) return false;
+  const s = String(text);
+  if (!EMOJI_RE.test(s)) return false;
+  const stripped = s.replace(EMOJI_GLOBAL_RE, '').replace(/[\s¡!¿?.,;:()"-]/g, '').trim();
+  return stripped.length === 0;
+}
+
 // Línea personal ocasional para Ricky (v3.4; fútbol agregado 2026-11-11):
 // sus perras Mila y Bruna, el pádel (juega casi todos los días), la bici
 // eléctrica, el scooter y el fútbol (fanatiquísimo del América y de la
@@ -739,6 +773,43 @@ function vipWarmGreeting(st) {
   return personalLine ? `${base} ${personalLine}` : base;
 }
 
+// Respuesta natural y cálida para Ricky cuando su mensaje no tiene una
+// intención de negocio clara (charla casual, comentario, etc.). Como
+// chatear con una persona: responde con contexto (sus perras, el pádel,
+// el fútbol) y mantiene la conversación abierta, sin sonar a bot.
+// Orden de Peter 2026-11-11: Daniela SIEMPRE le contesta a Ricky, TODO.
+// NUNCA es el aviso de "no es de Blü Bee" ni silencio. Incrementa el
+// contador de respuestas casuales (rota las variantes): quien lo llama
+// debe guardar el estado después (saveState).
+function vipCasualReply(st, text) {
+  const norm = normalize(text);
+  const vip = config.vipRicky || {};
+  const dogs = vip.dogs || [];
+  // Si menciona a las perras, responde por ellas.
+  if (dogs.length === 2 && (norm.includes('mila') || norm.includes('bruna'))) {
+    const [d1, d2] = dogs;
+    return `¡Ay, ${d1} y ${d2}! ¿Cómo están mis niñas? Mándales un abrazo de mi parte.`;
+  }
+  // Si menciona el pádel, responde por el pádel.
+  if (norm.includes('padel')) {
+    return '¡El pádel! ¿Cómo te fue hoy? Cuéntame.';
+  }
+  // Si menciona fútbol / América / Champions, responde por el fútbol.
+  if (norm.includes('america') || norm.includes('futbol') || norm.includes('champions')) {
+    return '¡El fútbol! ¿Cómo le fue a tu equipo? Cuéntame.';
+  }
+  // Respuesta abierta y cálida, rotando para no sonar repetitiva.
+  const variants = [
+    '¡Hola Ricky! Qué bueno leerte. ¿Qué me cuentas?',
+    '¡Ricky! Dime, ¿qué hay de nuevo?',
+    '¡Hola Ricky! Aquí estoy. ¿En qué te ayudo o qué me cuentas?',
+    '¡Qué gusto leerte, Ricky! ¿Cómo andas?',
+  ];
+  const idx = (st.vipCasualCount || 0) % variants.length;
+  st.vipCasualCount = (st.vipCasualCount || 0) + 1;
+  return variants[idx];
+}
+
 // Revisa los límites para un mensaje. Se llama DESPUÉS del filtro de estafa
 // y del comando de reinicio de Pedro, y ANTES del flujo normal, así aplica
 // en TODAS las etapas (también mientras espera nombre/empresa/contacto: un
@@ -773,7 +844,10 @@ async function checkLimits(st, text) {
   }
 
   // 2) "¿Eres una IA / un robot / una persona?" y pruebas de chatbot.
-  if (looksIdentityProbe(text)) {
+  // VIP Ricky: NO aplica. Peter ordenó (2026-11-11) que Daniela siempre
+  // le conteste a Ricky, TODO: si él pregunta eso, se le responde en el
+  // flujo normal, nunca se le deja sin respuesta por insistir.
+  if (!isVipRicky(from) && looksIdentityProbe(text)) {
     st.probeCount = (st.probeCount || 0) + 1;
     saveState(st);
     const repeated = st.probeCount >= 2;
@@ -787,7 +861,9 @@ async function checkLimits(st, text) {
   }
 
   // 3) Preguntas generales fuera del negocio.
-  if (looksGeneralTask(text)) {
+  // VIP Ricky: NO aplica (misma razón que la prueba de identidad: Peter
+  // ordenó que Daniela siempre le conteste a Ricky).
+  if (!isVipRicky(from) && looksGeneralTask(text)) {
     st.offtopicCount = (st.offtopicCount || 0) + 1;
     saveState(st);
     const repeated = st.offtopicCount >= 2;
@@ -1449,6 +1525,23 @@ async function handleMessage(msg) {
 
   const norm = normalize(text);
 
+  // VIP Ricky (orden de Peter 2026-11-11): Daniela SIEMPRE le contesta a
+  // Ricky, TODO. Si el mensaje son solo emojis, le responde con el video
+  // "Me encantan tus emojis, Ricky." Va antes de cualquier filtro de
+  // silencio, para que ningún estado (handedOff, límites, no-Blü Bee) lo
+  // deje sin respuesta. Caso real 2026-11-11: Ricky mandó solo emojis
+  // (corazones y risas) y Daniela no le contestó.
+  if (isVipRicky(from) && isEmojiOnly(text)) {
+    const emojiVideo = path.join(__dirname, 'media', 'daniela-emojis-ricky.mp4');
+    try {
+      await wa.sendVideo(from, emojiVideo);
+    } catch (e) {
+      console.error('Error mandando el video de emojis a Ricky:', e.message);
+      await wa.sendText(from, '¡Me encantan tus emojis, Ricky! ❤️');
+    }
+    return;
+  }
+
   // Comando de reinicio SOLO para Pedro (probar a Daniela repetidamente).
   // Si Pedro quedó en handedOff tras tocar "Hablar con Pedro", con esto
   // vuelve a empezar desde cero. Nadie más puede usarlo: solo responde
@@ -1476,8 +1569,11 @@ async function handleMessage(msg) {
     return;
   }
 
-  // Si ya se le pasó a Pedro, no seguir contestando (salvo que Pedro lo reactive borrando el estado)
-  if (st.handedOff) {
+  // Si ya se le pasó a Pedro, no seguir contestando (salvo que Pedro lo reactive borrando el estado).
+  // VIP Ricky (orden de Peter 2026-11-11): Daniela SIEMPRE le contesta a
+  // Ricky, aunque haya quedado en handedOff tras pedir hablar con Pedro.
+  // Para los demás, el silencio tras el traspaso sigue igual.
+  if (st.handedOff && !isVipRicky(from)) {
     await notifyPeter('Mensaje de contacto en espera', `La persona ${st.name || from} (${from}) escribió de nuevo:\n"${text}"\n\nDaniela no contestó porque ya se le pasó a Pedro.`, st);
     return;
   }
@@ -1940,6 +2036,17 @@ async function handleMainIntent(msg, st, text, norm) {
       maybeRequestFarewellVideo(st);
       return;
     }
+    // VIP Ricky (orden de Peter 2026-11-11): Daniela SIEMPRE le contesta
+    // a Ricky. Un mensaje sin intención clara NO es "no es de Blü Bee"
+    // para él: es charla con un amigo. Se responde con calidez y contexto,
+    // nunca se le deja sin respuesta ni se le pasa a Peter en su lugar.
+    // Tampoco se registra como pregunta sin respuesta (no es una pregunta
+    // de negocio que el equipo deba aprender a contestar).
+    if (isVipRicky(from)) {
+      await wa.sendText(from, vipCasualReply(st, text));
+      saveState(st);
+      return;
+    }
     logUnanswered(text);
     await notifyPeter(
       'Mensaje que no es de Blü Bee',
@@ -2158,6 +2265,10 @@ module.exports = {
   looksGenuinelyObscene,
   vipPersonalLine,
   vipWarmGreeting,
+  // Ricky siempre recibe respuesta (orden de Peter 2026-11-11): emojis y
+  // charla casual con contexto, como chateando con una persona.
+  isEmojiOnly,
+  vipCasualReply,
   // Normalización de la marca / errores de dedo (v3.2)
   normalizeBrandVariants,
   // Daniela inteligente (v3)
