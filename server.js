@@ -2,7 +2,10 @@
 // Recibe los mensajes de WhatsApp Cloud API y se los pasa a daniela.js.
 
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
+const wa = require('./whatsapp');
 const { handleMessage, deliverPendingFarewell } = require('./daniela');
 
 const app = express();
@@ -73,6 +76,31 @@ app.post('/deliver-farewell', async (req, res) => {
     return res.json(result);
   } catch (e) {
     console.error('Error en /deliver-farewell:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Entrega del video de disculpa personalizado para Ricky (autorizado por Peter).
+//   POST /deliver-apology  { "phone": "5215519518504" }
+// Envía media/daniela-disculpa-ricky-v3.mp4 a Ricky por WhatsApp y le pone
+// un ❤️ al video. Solo acepta el número VIP de Ricky, por seguridad.
+app.post('/deliver-apology', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const ricky = (config.vipRicky && config.vipRicky.phone) || '5215519518504';
+    if (phone !== ricky) return res.json({ ok: false, reason: 'not-ricky' });
+    const videoPath = path.join(__dirname, 'media', 'daniela-disculpa-ricky-v3.mp4');
+    if (!fs.existsSync(videoPath)) {
+      return res.json({ ok: false, reason: 'no-video' });
+    }
+    const sent = await wa.sendVideo(phone, videoPath);
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    if (messageId) {
+      await wa.sendReaction(phone, messageId, '❤️').catch((e) => console.error('Error al poner ❤️:', e.message));
+    }
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-apology:', e.message);
     return res.status(500).json({ ok: false, error: e.message });
   }
 });

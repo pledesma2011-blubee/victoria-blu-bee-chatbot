@@ -129,6 +129,17 @@ async function sendButtons(to, text, buttons) {
   });
 }
 
+// Reacciona a un mensaje con un emoji (por ejemplo ❤️).
+async function sendReaction(to, messageId, emoji) {
+  return graphPost('/messages', {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'reaction',
+    reaction: { message_id: messageId, emoji },
+  });
+}
+
 // Marca el mensaje como leído (las dos palomitas azules).
 async function markRead(messageId) {
   return graphPost('/messages', {
@@ -143,6 +154,7 @@ module.exports = {
   sendVideo,
   sendAudio,
   sendButtons,
+  sendReaction,
   markRead,
   downloadMedia,
 };
