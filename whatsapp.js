@@ -98,6 +98,20 @@ async function sendVideo(to, filePath, caption) {
   return graphPost('/messages', body);
 }
 
+// Envía una imagen (por ejemplo el logo) por WhatsApp, con pie opcional.
+async function sendImage(to, filePath, caption) {
+  const mediaId = await uploadMedia(filePath, 'image/jpeg');
+  const body = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'image',
+    image: { id: mediaId },
+  };
+  if (caption) body.image.caption = caption;
+  return graphPost('/messages', body);
+}
+
 async function sendAudio(to, filePath) {
   const mediaId = await uploadMedia(filePath, 'audio/ogg');
   return graphPost('/messages', {
@@ -152,6 +166,7 @@ async function markRead(messageId) {
 module.exports = {
   sendText,
   sendVideo,
+  sendImage,
   sendAudio,
   sendButtons,
   sendReaction,

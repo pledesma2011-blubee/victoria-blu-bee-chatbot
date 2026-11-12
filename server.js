@@ -105,6 +105,33 @@ app.post('/deliver-apology', async (req, res) => {
   }
 });
 
+// Entrega del logo oficial (800x800) a Peter por WhatsApp, vía Daniela.
+//   POST /deliver-logo  { "phone": "524421447169" }
+// Envía media/logo-perfil-800x800.jpg al WhatsApp personal de Peter para
+// que lo suba como foto de perfil del canal de YouTube. Solo acepta el
+// número de Peter, por seguridad.
+app.post('/deliver-logo', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const peter = config.peterWhatsApp || '524421447169';
+    if (phone !== peter) return res.json({ ok: false, reason: 'not-peter' });
+    const imagePath = path.join(__dirname, 'media', 'logo-perfil-800x800.jpg');
+    if (!fs.existsSync(imagePath)) {
+      return res.json({ ok: false, reason: 'no-image' });
+    }
+    const sent = await wa.sendImage(
+      phone,
+      imagePath,
+      'Hola Peter, aquí te mando el logo oficial de Blü Bee Technologies en 800×800, listo para subirlo como foto de perfil del canal de YouTube. Lo puedes descargar desde WhatsApp Web en tu MacBook.'
+    );
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-logo:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Salud del servidor
 app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: 'Blü Bee Technologies' }));
 
