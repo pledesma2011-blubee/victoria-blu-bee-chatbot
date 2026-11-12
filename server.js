@@ -159,6 +159,33 @@ app.post('/deliver-banner', async (req, res) => {
   }
 });
 
+// Entrega de la abeja (marca de agua del canal) a Peter por WhatsApp, vía Daniela.
+//   POST /deliver-watermark  { "phone": "524421447169" }
+// Envía media/abeja-marca-agua.png al WhatsApp personal de Peter para
+// que la suba como marca de agua en Personalización del canal. Solo acepta
+// el número de Peter, por seguridad.
+app.post('/deliver-watermark', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const peter = config.peterWhatsApp || '524421447169';
+    if (phone !== peter) return res.json({ ok: false, reason: 'not-peter' });
+    const imagePath = path.join(__dirname, 'media', 'abeja-marca-agua.png');
+    if (!fs.existsSync(imagePath)) {
+      return res.json({ ok: false, reason: 'no-image' });
+    }
+    const sent = await wa.sendImage(
+      phone,
+      imagePath,
+      'Hola Peter, aquí te mando la abeja dorada para la marca de agua del canal de YouTube. Descárgala desde WhatsApp Web en tu MacBook y súbela en Personalización del canal, en la parte de Marca de agua de los videos, con el botón Subir.'
+    );
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-watermark:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Entrega de un texto a Peter por WhatsApp, vía Daniela.
 //   POST /deliver-text  { "phone": "524421447169", "text": "..." }
 // Para mandarle textos largos (como la descripción del canal) que pueda
