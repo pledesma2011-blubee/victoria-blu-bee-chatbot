@@ -150,6 +150,15 @@ function loadState(phone) {
     demo_company: 'demo_capture',
   };
   if (stageMap[migrated.stage]) migrated.stage = stageMap[migrated.stage];
+  // (v3.5.2) Autolimpieza: si el estado guardado trae el nombre del bot
+  // como nombre del contacto ("Daniela", "Daniela soy", "Dani"...), se
+  // borra para que Daniela vuelva a preguntar el nombre. Sin esto, el
+  // saludo seguiría saliendo mal aunque la extracción ya esté corregida
+  // (caso real: Ana, 2026-11-12, estado viejo con "Daniela soy").
+  let cleaned = false;
+  if (migrated.name && isBotName(migrated.name)) { migrated.name = null; cleaned = true; }
+  if (migrated.preferredName && isBotName(migrated.preferredName)) { migrated.preferredName = null; cleaned = true; }
+  if (cleaned) saveState(migrated);
   return migrated;
 }
 
@@ -407,7 +416,7 @@ function parseAddressPref(text, fallbackName) {
     const title = nick[1] ? nick[1].trim().replace(/^(lic|ing|dr|dra|sr|sra)$/i, (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() + '.') : '';
     const base = nick[2].trim();
     const baseClean = base.replace(/^(Lic|Ing|Dr|Dra|Sr|Sra)\.?\s*/i, '').trim();
-    if (looksLikeName(baseClean)) {
+    if (looksLikeName(baseClean) && !isBotName(baseClean)) {
       preferredName = title ? `${title} ${capitalizeName(base)}` : capitalizeName(base);
     }
   }
@@ -667,12 +676,15 @@ function vipSafeParsedName(from, name) {
 // ¿Es este nombre el nombre del bot ("Daniela" o "Dani")? El nombre del bot
 // NUNCA es el nombre del contacto. Puede quedar guardado en el estado por
 // un bug viejo de extracción (caso real 2026-11-10: a Ana se le guardó
-// "Daniela" como nombre y Daniela le contestó "Mucho gusto, Daniela soy";
-// la extracción ya ignora "Daniela", pero el estado viejo sigue ahí).
-// La comparación es normalizada (minúsculas, sin acentos).
+// "Daniela soy" como nombre y Daniela le contestó "Hola, Daniela soy, soy
+// Daniela..."; el arreglo anterior solo bloqueaba la palabra exacta
+// "Daniela", pero "Daniela soy" se colaba porque la comparación era de
+// igualdad). La comparación es por palabra: basta con que UNA palabra sea
+// "daniela" o "dani" (normalizado, sin acentos). "Daniel" NO se bloquea:
+// es un nombre real distinto del bot.
 function isBotName(name) {
-  const n = normalize(name || '');
-  return n === 'daniela' || n === 'dani';
+  const words = normalize(name || '').split(/\s+/).filter(Boolean);
+  return words.some((w) => w === 'daniela' || w === 'dani');
 }
 
 // Nombre para dirigirse al contacto: preferredName o name, pero NUNCA el
