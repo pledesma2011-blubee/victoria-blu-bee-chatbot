@@ -133,7 +133,7 @@ async function setProfilePicture(filePath) {
   const mimeType = /\.png$/i.test(fileName) ? 'image/png' : 'image/jpeg';
   const sessionId = await createResumableUploadSession(fileName, buffer.length, mimeType);
   const handle = await uploadResumableFile(sessionId, buffer);
-  const data = await graphPost('/whatsapp_business_profile', { profile_picture_handle: handle });
+  const data = await graphPost('/whatsapp_business_profile', { messaging_product: 'whatsapp', profile_picture_handle: handle });
   if (data.success !== true) {
     throw new Error(`La API no confirmó el cambio de foto de perfil: ${JSON.stringify(data)}`);
   }
