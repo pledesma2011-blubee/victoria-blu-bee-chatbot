@@ -132,6 +132,33 @@ app.post('/deliver-logo', async (req, res) => {
   }
 });
 
+// Entrega del banner del canal (2560x1440) a Peter por WhatsApp, vía Daniela.
+//   POST /deliver-banner  { "phone": "524421447169" }
+// Envía media/banner-2560x1440.jpg al WhatsApp personal de Peter para
+// que lo suba como banner del canal de YouTube. Solo acepta el
+// número de Peter, por seguridad.
+app.post('/deliver-banner', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const peter = config.peterWhatsApp || '524421447169';
+    if (phone !== peter) return res.json({ ok: false, reason: 'not-peter' });
+    const imagePath = path.join(__dirname, 'media', 'banner-2560x1440.jpg');
+    if (!fs.existsSync(imagePath)) {
+      return res.json({ ok: false, reason: 'no-image' });
+    }
+    const sent = await wa.sendImage(
+      phone,
+      imagePath,
+      'Hola Peter, aquí te mando el banner del canal de YouTube (2560×1440), listo para subirlo en Personalización del canal. Lo puedes descargar desde WhatsApp Web en tu MacBook.'
+    );
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-banner:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Salud del servidor
 app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: 'Blü Bee Technologies' }));
 
