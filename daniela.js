@@ -1377,8 +1377,11 @@ async function transcribeAudio(filePath) {
 // callada le pregunta al cerebro: un modelo de lenguaje (LLM) que entiende
 // cualquier pregunta en español y responde con fluidez, como el chatbot de
 // Kavak. Proveedor principal: Groq (gratis, sin tarjeta; endpoint
-// compatible con OpenAI, modelo llama-3.3-70b-versatile, clave
+// compatible con OpenAI, modelo openai/gpt-oss-120b, clave
 // GROQ_API_KEY — la misma que ya usa para transcribir notas de voz).
+// (v4.8, 2026-11-13: Groq retiró llama-3.3-70b-versatile el 16 ago 2026 y
+// cada llamada al cerebro daba 404 "model not found" — el cerebro nunca
+// funcionó en vivo. gpt-oss-120b es el reemplazo recomendado por Groq.)
 // Respaldo: OpenAI (modelo gpt-4o-mini, clave OPENAI_API_KEY).
 // Prioridad: Groq > OpenAI > flujo anterior (avisar a Pedro).
 // Las claves se leen de config/.env y NUNCA se escriben en el código ni
@@ -1391,7 +1394,7 @@ async function transcribeAudio(filePath) {
 // lo investigo" + guardar la pregunta para Tomás).
 
 const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_CHAT_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_CHAT_MODEL = 'openai/gpt-oss-120b';
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_CHAT_MODEL = 'gpt-4o-mini';
 
@@ -3133,6 +3136,9 @@ module.exports = {
   // respuesta en la base.
   brainSystemPrompt,
   brainAnswerSafe,
+  // Modelo del cerebro (v4.8): se fija en pruebas para que nunca vuelva
+  // a apuntar a un modelo retirado sin que una prueba lo atrape.
+  GROQ_CHAT_MODEL,
   brainReply,
   askBrain,
   askBrainWithGroq,
