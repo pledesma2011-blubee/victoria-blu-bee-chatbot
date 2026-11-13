@@ -52,6 +52,12 @@
 // mínimo y es el proveedor principal; OpenAI (whisper-1) queda como
 // respaldo si no hay clave de Groq. Sin ninguna clave, Daniela pide que le
 // escriban el mensaje. Ver chatbot-whatsapp-blu-bee-diseno.md §13.4.
+// Reunión virtual v4.3 (2026-11-13, orden de Peter): Daniela SOLO ofrece
+// reuniones virtuales (Google Meet primero, Zoom alternativo). Presencial
+// NO se ofrece: se acuerda después de la virtual, o Peter lo atiende
+// directo si es empresa grande que no acepta virtual (Daniela toma los
+// datos y se los pasa). Peter confirma cada reunión y Daniela manda la
+// liga por texto (endpoint POST /deliver-meeting-confirm).
 
 const fs = require('fs');
 const path = require('path');
@@ -175,6 +181,27 @@ function saveLead(lead) {
   lead.fecha = new Date().toISOString();
   leads.push(lead);
   fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2));
+  return lead;
+}
+
+function readLeads() {
+  try {
+    const leads = JSON.parse(fs.readFileSync(LEADS_FILE, 'utf8'));
+    return Array.isArray(leads) ? leads : [];
+  } catch { return []; }
+}
+
+// Marca como confirmada la reunión virtual pendiente de un teléfono (v4.3).
+// Devuelve el lead confirmado o null si no hay reunión virtual pendiente.
+// Guardia del endpoint /deliver-meeting-confirm: solo se puede confirmar
+// a quien realmente pidió una reunión virtual.
+function confirmMeetingLead(phone) {
+  const leads = readLeads();
+  const lead = [...leads].reverse().find((l) => l.telefono === phone && l.tipo === 'reunion_virtual' && !l.confirmada);
+  if (!lead) return null;
+  lead.confirmada = true;
+  lead.fechaConfirmacion = new Date().toISOString();
   fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2));
   return lead;
 }
@@ -1524,7 +1551,13 @@ async function brainReply(st, text) {
 function detectIntent(text, norm) {
   if (contains(text, ['gracias', 'muchas gracias', 'adios', 'hasta luego', 'eso es todo', 'eso seria todo', 'perfecto gracias', 'ya quedo'])) return { kind: 'farewell' };
   if (contains(text, ['hablar con pedro', 'quiero hablar con pedro', 'pasame con pedro', 'con una persona', 'con un humano', 'con alguien'])) return { kind: 'pedro' };
-  if (contains(text, ['agendar', 'demostracion', 'demo', 'cita', 'reunion', 'quiero una demo'])) return { kind: 'demo' };
+  // Demo vs reunión (v4.3, orden de Peter 2026-11-13): "demo/demostración"
+  // → demo; "reunión/junta/videollamada/cita/Meet/Zoom" → reunión virtual
+  // (SOLO virtuales: presencial no se ofrece, se acuerda después de la
+  // virtual o Peter lo atiende directo). "agendar" solo → demo.
+  if (contains(text, ['demostracion', 'demo', 'quiero una demo'])) return { kind: 'demo' };
+  if (contains(text, ['reunion', 'reunión', 'junta', 'videollamada', 'videoconferencia', 'cita', 'meet', 'zoom'])) return { kind: 'meeting' };
+  if (contains(text, ['agendar'])) return { kind: 'demo' };
   if (contains(text, ['pedro'])) return { kind: 'pedro_message' };
   if (contains(text, ['vendo', 'ofrezco', 'proveedor', 'les vendo', 'quiero venderles', 'servicio para ustedes', 'les ofrezco'])) return { kind: 'vendor' };
   if (contains(text, ['que es iot', 'que es el iot', 'que significa iot'])) return { kind: 'faq', key: 'iot' };
@@ -1582,7 +1615,7 @@ const OTHER_BUSINESS_PATTERNS = [
 // Nunca se activa para intenciones claras de negocio (demo, precio, info,
 // sector, faq, proveedor, despedida, ni "hablar con Pedro").
 function detectPersonal(text, norm, st, intent) {
-  if (intent && ['demo', 'price', 'info', 'sector', 'faq', 'vendor', 'farewell', 'pedro'].includes(intent.kind)) {
+  if (intent && ['demo', 'meeting', 'price', 'info', 'sector', 'faq', 'vendor', 'farewell', 'pedro'].includes(intent.kind)) {
     return null;
   }
   // Si la persona se presenta COMO Pedro ("soy Pedro", "me llamo Pedro"),
@@ -1861,7 +1894,7 @@ async function handleMessage(msg) {
       const stripped = [first.name, first.company].filter(Boolean)
         .reduce((acc, s) => acc.replace(new RegExp(escapeRegExp(s), 'i'), ''), text);
       const intent = detectIntent(stripped, normalize(stripped));
-      if (intent && ['demo', 'price', 'pedro', 'pedro_message', 'vendor', 'sector', 'faq', 'info'].includes(intent.kind)) {
+      if (intent && ['demo', 'meeting', 'price', 'pedro', 'pedro_message', 'vendor', 'sector', 'faq', 'info'].includes(intent.kind)) {
         st.pendingNeed = { text: stripped, norm: normalize(stripped) };
       }
       // Flujo ágil (v3): si ya expresó su necesidad, la necesidad manda:
@@ -1986,7 +2019,7 @@ async function handleMessage(msg) {
       const stripped = [name, company].filter(Boolean)
         .reduce((acc, s) => acc.replace(new RegExp(escapeRegExp(s), 'i'), ''), text);
       const intent = detectIntent(stripped, normalize(stripped));
-      if (intent && ['demo', 'price', 'pedro', 'pedro_message', 'vendor', 'sector', 'faq', 'info'].includes(intent.kind)) {
+      if (intent && ['demo', 'meeting', 'price', 'pedro', 'pedro_message', 'vendor', 'sector', 'faq', 'info'].includes(intent.kind)) {
         st.pendingNeed = { text: stripped, norm: normalize(stripped) };
       }
       // Flujo ágil (v3): si ya había expresado su necesidad, la necesidad
@@ -2153,6 +2186,120 @@ async function handleMessage(msg) {
     return;
   }
 
+  // --- Reunión virtual (v4.3, orden de Peter 2026-11-13): SOLO virtuales. ---
+  // Captura de datos faltantes antes de agendar la reunión.
+  if (st.stage === 'meeting_capture') {
+    let { name, company } = parseNameCompany(text);
+    name = vipSafeParsedName(from, name);
+    if (name && !isVipRicky(from)) st.name = name;
+    if (company) st.company = company;
+    if (!st.name && !st.company) {
+      const onlyCompany = looksLikeCompany(text);
+      if (onlyCompany) st.company = onlyCompany;
+    }
+    st.needsContact = !(st.name && st.company);
+    maybeRequestFarewellVideo(st);
+    st.stage = 'meeting_platform';
+    saveState(st);
+    await wa.sendText(from, '¡Con gusto! Las reuniones son virtuales. ¿Prefiere por Google Meet o por Zoom?');
+    return;
+  }
+
+  // --- Reunión virtual: plataforma (Meet primero, Zoom alternativo) ---
+  if (st.stage === 'meeting_platform') {
+    // Pide presencial en este punto → escalación a Peter (no se ofrece).
+    if (wantsInPerson(text, norm)) {
+      st.stage = 'inperson_when';
+      saveState(st);
+      await wa.sendText(from, `Con gusto le paso sus datos a la persona indicada para coordinar una reunión presencial. ¿Qué día y hora ${st.formality === 'tu' ? 'te' : 'le'} conviene para que le contacten?`);
+      return;
+    }
+    // Sin preferencia clara ("la que sea", "cualquiera") → Meet por defecto.
+    const platform = parseMeetingPlatform(norm) || 'meet';
+    st.meetingPlatform = platform;
+    st.stage = 'meeting_when';
+    saveState(st);
+    await wa.sendText(from, `Perfecto, por ${platform === 'zoom' ? 'Zoom' : 'Google Meet'}. ¿Qué día y hora ${st.formality === 'tu' ? 'te' : 'le'} conviene?`);
+    return;
+  }
+
+  // --- Reunión virtual: día y hora ---
+  if (st.stage === 'meeting_when') {
+    const when = text.trim();
+    const platform = st.meetingPlatform || 'meet';
+    st.need = `Reunión virtual (${platform}): ${when}`;
+    saveLead({
+      tipo: 'reunion_virtual',
+      nombre: st.name,
+      empresa: st.company,
+      telefono: from,
+      diaHora: when,
+      plataforma: platform,
+      correo: st.email || null,
+      telefonoContacto: st.contactPhone || from,
+      preferencia: st.contactPref || null,
+    });
+    await notifyPeter(
+      'Nueva reunión virtual solicitada',
+      `Nueva solicitud de reunión virtual:\n• Plataforma: ${platform === 'zoom' ? 'Zoom' : 'Google Meet'}\n• Día y hora: ${when}\n\nConfírmale la reunión y mándale la liga, por favor.`,
+      st
+    );
+    const display = contactDisplayName(st);
+    await wa.sendText(
+      from,
+      `Listo${display ? `, ${display}` : ''}. Ya le pasé sus datos al área correspondiente, le confirman la reunión en cuanto puedan.`
+    );
+    await closeChat(st);
+    return;
+  }
+
+  // --- Reunión presencial solicitada (v4.3): escalación a Peter. ---
+  // Captura de datos faltantes antes de pasar el caso a Peter.
+  if (st.stage === 'inperson_capture') {
+    let { name, company } = parseNameCompany(text);
+    name = vipSafeParsedName(from, name);
+    if (name && !isVipRicky(from)) st.name = name;
+    if (company) st.company = company;
+    if (!st.name && !st.company) {
+      const onlyCompany = looksLikeCompany(text);
+      if (onlyCompany) st.company = onlyCompany;
+    }
+    st.needsContact = !(st.name && st.company);
+    maybeRequestFarewellVideo(st);
+    st.stage = 'inperson_when';
+    saveState(st);
+    await wa.sendText(from, `Con gusto le paso sus datos a la persona indicada para coordinar una reunión presencial. ¿Qué día y hora ${st.formality === 'tu' ? 'te' : 'le'} conviene para que le contacten?`);
+    return;
+  }
+
+  // --- Reunión presencial solicitada: día y hora (para que Peter contacte) ---
+  if (st.stage === 'inperson_when') {
+    const when = text.trim();
+    st.need = `Reunión presencial solicitada: ${when}`;
+    saveLead({
+      tipo: 'reunion_presencial_solicitada',
+      nombre: st.name,
+      empresa: st.company,
+      telefono: from,
+      diaHora: when,
+      correo: st.email || null,
+      telefonoContacto: st.contactPhone || from,
+      preferencia: st.contactPref || null,
+    });
+    await notifyPeter(
+      'Solicitan reunión presencial',
+      `Un contacto pidió reunión PRESENCIAL (no aceptó virtual):\n• Día y hora que propone: ${when}\n\nContáctalo directo para coordinarla, por favor.`,
+      st
+    );
+    const display = contactDisplayName(st);
+    await wa.sendText(
+      from,
+      `Listo${display ? `, ${display}` : ''}. Ya le pasé sus datos a la persona indicada, le contactan en cuanto puedan para coordinar la reunión presencial.`
+    );
+    await closeChat(st);
+    return;
+  }
+
   // --- Captura de datos faltantes antes de tomar un recado (precio/propuesta) ---
   if (st.stage === 'price_capture') {
     let { name, company } = parseNameCompany(text);
@@ -2206,7 +2353,7 @@ async function handleMessage(msg) {
     // mensaje nuevo: la conversación sigue fluida, no se traba en el video.
     const vIntent = detectIntent(text, norm);
     const vKb = findAnswer(text);
-    if ((vIntent && ['demo', 'price', 'info', 'sector', 'faq', 'vendor', 'pedro', 'pedro_message', 'farewell'].includes(vIntent.kind)) || vKb) {
+    if ((vIntent && ['demo', 'meeting', 'price', 'info', 'sector', 'faq', 'vendor', 'pedro', 'pedro_message', 'farewell'].includes(vIntent.kind)) || vKb) {
       st.stage = 'main';
       saveState(st);
       return handleMainIntent(msg, st, text, norm);
@@ -2234,6 +2381,20 @@ async function handleMessage(msg) {
 }
 
 // ---------- conversación principal: solo intención por texto libre ----------
+
+// ¿Pide reunión presencial? (v4.3, orden de Peter 2026-11-13: Daniela SOLO
+// ofrece virtuales; si piden presencial, toma los datos y los pasa a Peter,
+// que los contacta directo. Nunca ofrece presencial ni promete viajar.)
+function wantsInPerson(text, norm) {
+  return contains(text, ['presencial', 'en persona', 'en sus oficinas', 'en su oficina', 'visitarlos', 'visitarles', 'ir a verlos', 'cara a cara', 'reunion presencial', 'reunión presencial']);
+}
+
+// ¿Qué plataforma virtual prefiere? 'meet' | 'zoom' | null (no dijo).
+function parseMeetingPlatform(norm) {
+  if (/\bzoom\b/.test(norm)) return 'zoom';
+  if (/\bmeet\b|google\b/.test(norm)) return 'meet';
+  return null;
+}
 
 async function handleMainIntent(msg, st, text, norm) {
   const from = st.phone;
@@ -2416,6 +2577,43 @@ async function handleMainIntent(msg, st, text, norm) {
       st.stage = 'demo_when';
       saveState(st);
       await wa.sendText(from, `¡Perfecto! La demostración es gratuita. ¿Qué día y hora ${leTe} conviene?`);
+      return;
+    }
+
+    case 'meeting': {
+      // Reunión virtual (v4.3, orden de Peter 2026-11-13): SOLO virtuales
+      // (Google Meet primero, Zoom alternativo). Presencial NO se ofrece:
+      // se acuerda después de la virtual, o Peter lo atiende directo si es
+      // empresa grande que no acepta virtual (escalación, ver abajo).
+      st.need = 'Reunión virtual';
+      // Pide presencial → escalación: toma los datos y los pasa a Peter.
+      if (wantsInPerson(text, norm)) {
+        if (!st.name || !st.company) {
+          st.needsContact = true;
+          st.stage = 'inperson_capture';
+          saveState(st);
+          await wa.sendText(from, !st.name
+            ? 'Con gusto le paso sus datos a la persona indicada para coordinar una reunión presencial. ¿Me dice su nombre y de qué empresa nos escribe?'
+            : 'Con gusto le paso sus datos a la persona indicada para coordinar una reunión presencial. ¿De qué empresa nos escribe?');
+          return;
+        }
+        st.stage = 'inperson_when';
+        saveState(st);
+        await wa.sendText(from, `Con gusto le paso sus datos a la persona indicada para coordinar una reunión presencial. ¿Qué día y hora ${leTe} conviene para que le contacten?`);
+        return;
+      }
+      if (!st.name || !st.company) {
+        st.needsContact = true;
+        st.stage = 'meeting_capture';
+        saveState(st);
+        await wa.sendText(from, !st.name
+          ? '¡Con gusto! Las reuniones son virtuales, por Google Meet o Zoom. Para agendarla, ¿me dice su nombre y de qué empresa nos escribe?'
+          : '¡Con gusto! Las reuniones son virtuales, por Google Meet o Zoom. ¿De qué empresa nos escribe?');
+        return;
+      }
+      st.stage = 'meeting_platform';
+      saveState(st);
+      await wa.sendText(from, '¡Con gusto! Las reuniones son virtuales. ¿Prefiere por Google Meet o por Zoom?');
       return;
     }
 
@@ -2787,4 +2985,9 @@ module.exports = {
   // alcance, no "dame un segundo" ni cerebro. Aplica a todos menos Ricky.
   isOffTopicQuestion,
   OFF_TOPIC_REPLY,
+  // Reunión virtual (v4.3, orden de Peter 2026-11-13): SOLO virtuales.
+  wantsInPerson,
+  parseMeetingPlatform,
+  readLeads,
+  confirmMeetingLead,
 };

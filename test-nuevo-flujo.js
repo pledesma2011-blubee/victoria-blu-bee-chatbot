@@ -586,6 +586,138 @@ async function incoming(phone, text) {
   check('brainSystemPrompt incluye la redirección fuera de tema', /Para otros temas te recomiendo consultar otras herramientas/.test(sysPrompt));
   check('brainSystemPrompt incluye el portafolio amplio', /chatbots y asistentes virtuales/.test(sysPrompt));
 
+  // ---------- (p) Reunión virtual (v4.3, orden de Peter 2026-11-13):
+  // SOLO virtuales (Meet primero, Zoom alternativo). Presencial NO se
+  // ofrece: se acuerda después de la virtual, o Peter lo atiende directo.
+  console.log('\n(p) Reunión virtual (v4.3):');
+  // (p-a) Helpers directos.
+  check('wantsInPerson("reunión presencial")', daniela.wantsInPerson('quiero una reunion presencial', 'quiero una reunion presencial'));
+  check('wantsInPerson("en persona")', daniela.wantsInPerson('mejor en persona', 'mejor en persona'));
+  check('wantsInPerson("quiero una reunión") es falso', !daniela.wantsInPerson('quiero una reunion', 'quiero una reunion'));
+  check('parseMeetingPlatform("por Zoom") = zoom', daniela.parseMeetingPlatform('por zoom') === 'zoom');
+  check('parseMeetingPlatform("por Meet") = meet', daniela.parseMeetingPlatform('por meet') === 'meet');
+  check('parseMeetingPlatform("la que sea") = null', daniela.parseMeetingPlatform('la que sea') === null);
+  // (p-b) Contacto nuevo C: saludo y datos, luego pide reunión virtual.
+  const MC = '5215500000003';
+  await incoming(MC, 'Hola');
+  mark = sent.length;
+  await incoming(MC, 'Soy Carlos Ruiz de Grupo Andares');
+  m = since(mark, MC);
+  st = readState(MC);
+  console.log('  (p-b) Contacto nuevo C, nombre+empresa:');
+  check('nombre capturado', st && st.name === 'Carlos Ruiz', `name=${st && st.name}`);
+  check('empresa capturada', st && st.company === 'Grupo Andares', `company=${st && st.company}`);
+  mark = sent.length;
+  await incoming(MC, 'de usted');
+  m = since(mark, MC);
+  mark = sent.length;
+  await incoming(MC, 'carlos@andares.com, WhatsApp al mismo número');
+  m = since(mark, MC);
+  st = readState(MC);
+  check('etapa = main', st && st.stage === 'main', `stage=${st && st.stage}`);
+  mark = sent.length;
+  await incoming(MC, 'Quiero agendar una reunión');
+  m = since(mark, MC);
+  st = readState(MC);
+  console.log('  (p-b) C: "Quiero agendar una reunión":');
+  check('pregunta Meet o Zoom', hasText(m, /¿Prefiere por Google Meet o por Zoom\?/));
+  check('dice que son virtuales', hasText(m, /Las reuniones son virtuales/));
+  check('etapa = meeting_platform', st && st.stage === 'meeting_platform', `stage=${st && st.stage}`);
+  // (p-c) Elige Zoom → pide día/hora → lead guardado, aviso a Peter.
+  mark = sent.length;
+  await incoming(MC, 'Por Zoom');
+  m = since(mark, MC);
+  st = readState(MC);
+  check('pregunta día y hora', hasText(m, /¿Qué día y hora le conviene\?/));
+  check('confirma Zoom', hasText(m, /por Zoom/));
+  check('etapa = meeting_when', st && st.stage === 'meeting_when', `stage=${st && st.stage}`);
+  mark = sent.length;
+  await incoming(MC, 'mañana a las 10');
+  m = since(mark, MC);
+  st = readState(MC);
+  const leadMeeting = readLeads().find((l) => l.tipo === 'reunion_virtual' && l.nombre === 'Carlos Ruiz');
+  console.log('  (p-c) C: "mañana a las 10" (Zoom):');
+  check('lead reunion_virtual guardado', !!leadMeeting && leadMeeting.plataforma === 'zoom' && /mañana/i.test(leadMeeting.diaHora || ''), JSON.stringify(leadMeeting));
+  check('etapa = closed', st && st.stage === 'closed', `stage=${st && st.stage}`);
+  check('confirmación enviada', hasText(m, /Ya le pasé sus datos al área correspondiente, le confirman la reunión/));
+  const noteMeeting = notices(since(mark, PETER));
+  check('notifyPeter: aviso a Pedro', noteMeeting.length > 0);
+  check('aviso dice Zoom y día/hora', noteMeeting.length > 0 && /Zoom/.test(noteMeeting[0]) && /mañana a las 10/.test(noteMeeting[0]));
+  // (p-d) Sin preferencia de plataforma → Meet por defecto.
+  const MD = '5215500000004';
+  await incoming(MD, 'Hola');
+  await incoming(MD, 'Soy Laura Méndez de Plaza Querétaro');
+  await incoming(MD, 'de tú');
+  await incoming(MD, 'laura@plaza.com, WhatsApp al mismo número');
+  mark = sent.length;
+  await incoming(MD, 'Quiero una videollamada');
+  m = since(mark, MD);
+  st = readState(MD);
+  console.log('  (p-d) D: "Quiero una videollamada":');
+  check('pregunta Meet o Zoom', hasText(m, /¿Prefiere por Google Meet o por Zoom\?/));
+  mark = sent.length;
+  await incoming(MD, 'la que sea');
+  m = since(mark, MD);
+  st = readState(MD);
+  check('Meet por defecto', hasText(m, /por Google Meet/));
+  check('etapa = meeting_when', st && st.stage === 'meeting_when', `stage=${st && st.stage}`);
+  mark = sent.length;
+  await incoming(MD, 'el viernes a las 3');
+  m = since(mark, MD);
+  const leadMeet = readLeads().find((l) => l.tipo === 'reunion_virtual' && l.nombre === 'Laura Méndez');
+  check('lead guardado con plataforma meet', !!leadMeet && leadMeet.plataforma === 'meet', JSON.stringify(leadMeet));
+  // (p-e) Presencial: escalación a Peter, NO se ofrece.
+  const ME = '5215500000005';
+  await incoming(ME, 'Hola');
+  await incoming(ME, 'Soy Jorge Salinas de Constructora del Bajío');
+  await incoming(ME, 'de usted');
+  await incoming(ME, 'jorge@constructora.com, WhatsApp al mismo número');
+  mark = sent.length;
+  await incoming(ME, 'Quiero una reunión presencial');
+  m = since(mark, ME);
+  st = readState(ME);
+  console.log('  (p-e) E: "Quiero una reunión presencial":');
+  check('NO ofrece presencial, pasa a la persona indicada', hasText(m, /Con gusto le paso sus datos a la persona indicada para coordinar una reunión presencial/));
+  check('NO pregunta Meet o Zoom', !hasText(m, /Google Meet o por Zoom/));
+  check('etapa = inperson_when', st && st.stage === 'inperson_when', `stage=${st && st.stage}`);
+  mark = sent.length;
+  await incoming(ME, 'el lunes a las 9');
+  m = since(mark, ME);
+  st = readState(ME);
+  const leadInperson = readLeads().find((l) => l.tipo === 'reunion_presencial_solicitada' && l.nombre === 'Jorge Salinas');
+  console.log('  (p-e) E: "el lunes a las 9":');
+  check('lead reunion_presencial_solicitada guardado', !!leadInperson && /lunes/i.test(leadInperson.diaHora || ''), JSON.stringify(leadInperson));
+  check('etapa = closed', st && st.stage === 'closed', `stage=${st && st.stage}`);
+  const noteInperson = notices(since(mark, PETER));
+  check('aviso a Pedro dice PRESENCIAL', noteInperson.length > 0 && /PRESENCIAL/.test(noteInperson[0]));
+  // (p-f) Presencial en la etapa de plataforma: también escala.
+  const MF = '5215500000006';
+  await incoming(MF, 'Hola');
+  await incoming(MF, 'Soy Ana Torres de Corporativo Andares');
+  await incoming(MF, 'de tú');
+  await incoming(MF, 'ana@andares.com, WhatsApp al mismo número');
+  await incoming(MF, 'Quiero agendar una cita');
+  mark = sent.length;
+  await incoming(MF, 'presencial');
+  m = since(mark, MF);
+  st = readState(MF);
+  console.log('  (p-f) F: responde "presencial" a Meet/Zoom:');
+  check('escala a la persona indicada', hasText(m, /Con gusto le paso sus datos a la persona indicada para coordinar una reunión presencial/));
+  check('etapa = inperson_when', st && st.stage === 'inperson_when', `stage=${st && st.stage}`);
+  // (p-g) confirmMeetingLead: confirma el lead de C, segunda vez null.
+  const confirmed = daniela.confirmMeetingLead(MC);
+  check('confirmMeetingLead confirma el lead de C', !!confirmed && confirmed.confirmada === true, JSON.stringify(confirmed));
+  check('segunda confirmación = null', daniela.confirmMeetingLead(MC) === null);
+  check('sin reunión pendiente = null', daniela.confirmMeetingLead('521999999999') === null);
+  // (p-h) Regresión: "quiero una demo" sigue siendo demo, no reunión.
+  mark = sent.length;
+  await incoming(B, 'Quiero una demo');
+  m = since(mark, B);
+  st = readState(B);
+  console.log('  (p-h) Regresión demo:');
+  check('demo: pide día/hora de demostración', hasText(m, /¿Qué día y hora te conviene\?/) && st && st.stage === 'demo_when', `stage=${st && st.stage}`);
+  check('demo: NO menciona reunión virtual', !hasText(m, /reuniones son virtuales|Google Meet o por Zoom/));
+
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
   console.log('\n(verificación global):');

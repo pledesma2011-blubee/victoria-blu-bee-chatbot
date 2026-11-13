@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const wa = require('./whatsapp');
-const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion } = require('./daniela');
+const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion, confirmMeetingLead } = require('./daniela');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -331,6 +331,28 @@ app.post('/deliver-answer', async (req, res) => {
     return res.json({ ok: true, messageId: messageId || null });
   } catch (e) {
     console.error('Error en /deliver-answer:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Confirma una reunión virtual a un prospecto por texto (v4.3, orden de
+// Peter 2026-11-13: solo virtuales, Peter confirma y Daniela manda la liga).
+//   POST /deliver-meeting-confirm  { "phone": "<teléfono del prospecto>", "text": "<confirmación con la liga de Meet/Zoom>" }
+// Guardia: solo se puede confirmar a un teléfono que tenga una reunión
+// virtual pendiente (lead tipo reunion_virtual sin confirmar). La marca
+// como confirmada para no reenviarla dos veces.
+app.post('/deliver-meeting-confirm', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const text = String((req.body && req.body.text) || '');
+    if (!text) return res.json({ ok: false, reason: 'no-text' });
+    const lead = confirmMeetingLead(phone);
+    if (!lead) return res.json({ ok: false, reason: 'no-pending-meeting' });
+    const sent = await wa.sendText(phone, text);
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-meeting-confirm:', e.message);
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
