@@ -129,6 +129,30 @@ app.post('/deliver-ricky-dogs', async (req, res) => {
   }
 });
 
+// Entrega del saludo de viernes a Ricky por WhatsApp (Daniela le desea
+// un excelente fin de semana y saluda a Mila y a Bruna).
+//   POST /deliver-friday-ricky  { "phone": "5215519518504" }
+// Envía media/daniela-viernes-ricky-v2.mp4 a Ricky por WhatsApp. Solo
+// acepta el número VIP de Ricky, por seguridad. Lo llama el proceso que
+// autoriza Peter cuando quiere que Daniela le mande el saludo de viernes.
+app.post('/deliver-friday-ricky', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const ricky = (config.vipRicky && config.vipRicky.phone) || '5215519518504';
+    if (phone !== ricky) return res.json({ ok: false, reason: 'not-ricky' });
+    const videoPath = path.join(__dirname, 'media', 'daniela-viernes-ricky-v2.mp4');
+    if (!fs.existsSync(videoPath)) {
+      return res.json({ ok: false, reason: 'no-video' });
+    }
+    const sent = await wa.sendVideo(phone, videoPath);
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-friday-ricky:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Entrega del logo oficial (800x800) a Peter por WhatsApp, vía Daniela.
 //   POST /deliver-logo  { "phone": "524421447169" }
 // Envía media/logo-perfil-800x800.jpg al WhatsApp personal de Peter para
