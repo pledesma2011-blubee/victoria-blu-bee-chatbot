@@ -201,6 +201,10 @@ const NAME_BLOCK_WORDS = new Set([
   'si', 'no', 'favor', 'llamo', 'nombre', 'es', 'yo', 'soy', 'me',
   'vinedo', 'hotel', 'hospital', 'centro', 'comercial', 'industria',
   'gobierno', 'ciudad', 'inteligente', 'reiniciar',
+  // Preguntas de saludo que nunca son un nombre (caso real 2026-11-13:
+  // "Hola Daniela, buenos días, ¿cómo estás?" guardó "Cómo Estás" como
+  // nombre). 'como', 'estas', 'tal', 'bien', 'que' no son nombres.
+  'como', 'estas', 'tal', 'bien', 'que',
 ]);
 
 // Diminutivos y cariños con los que la gente se dirige a Daniela (v3.1,
@@ -1502,6 +1506,16 @@ async function handleMessage(msg) {
     saveState(st);
   }
 
+  // Dueño — Peter (el jefe): su nombre queda fijo como 'Pedro' en cada
+  // mensaje, así ningún flujo lo puede cambiar ni guardar un nombre
+  // extraído por error (caso real 2026-11-13: su saludo "Hola Daniela,
+  // buenos días, ¿cómo estás?" guardó "Cómo Estás" como nombre).
+  if (sameNumber(from, config.peterWhatsApp)) {
+    st.name = 'Pedro';
+    st.preferredName = 'Pedro';
+    saveState(st);
+  }
+
   // Texto del mensaje (o texto del botón que tocó, por compatibilidad)
   let text = '';
   if (msg.type === 'text') text = msg.text.body || '';
@@ -2046,6 +2060,18 @@ async function handleMainIntent(msg, st, text, norm) {
         await wa.sendText(from, '¿Le gustaría ver un breve video de lo que hacemos en Blü Bee?');
       }
       maybeRequestFarewellVideo(st);
+      return;
+    }
+    // Dueño — Peter (el jefe, orden 2026-11-13): Daniela SIEMPRE le
+    // contesta a Peter, de todo. Un saludo o mensaje de Peter nunca es
+    // "no es de Blü Bee" y nunca se le notifica a él mismo como aviso.
+    // Se le responde directo, como a su jefe. Caso real 2026-11-13: Peter
+    // le mandó una nota de voz ("Hola Daniela, buenos días, ¿cómo estás?")
+    // y Daniela no le contestó, solo le mandó a él mismo el aviso de
+    // "no es de Blü Bee" con el nombre mal extraído ("Cómo Estás").
+    if (sameNumber(from, config.peterWhatsApp)) {
+      await wa.sendText(from, 'Hola Pedro, buenos días. Muy bien, gracias. ¿En qué le puedo ayudar?');
+      saveState(st);
       return;
     }
     // VIP Ricky (orden de Peter 2026-11-11): Daniela SIEMPRE le contesta
