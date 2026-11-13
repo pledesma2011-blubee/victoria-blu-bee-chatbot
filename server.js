@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const wa = require('./whatsapp');
-const { handleMessage, deliverPendingFarewell } = require('./daniela');
+const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion } = require('./daniela');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -289,7 +289,7 @@ app.post('/set-profile-photo', async (req, res) => {
 // resueltas; el envío de la respuesta usa /deliver-answer.
 app.get('/preguntas-pendientes', (req, res) => {
   try {
-    const all = daniela.readPendingQuestions();
+    const all = readPendingQuestions();
     const pending = all.filter((e) => !e.resuelta);
     return res.json({ ok: true, pendientes: pending, total: pending.length });
   } catch (e) {
@@ -302,7 +302,7 @@ app.post('/preguntas-pendientes/resolver', async (req, res) => {
   try {
     const id = String((req.body && req.body.id) || '');
     if (!id) return res.json({ ok: false, reason: 'no-id' });
-    const done = daniela.resolvePendingQuestion(id);
+    const done = resolvePendingQuestion(id);
     return res.json({ ok: done });
   } catch (e) {
     console.error('Error en /preguntas-pendientes/resolver:', e.message);
@@ -327,7 +327,7 @@ app.post('/deliver-answer', async (req, res) => {
     if (!text) return res.json({ ok: false, reason: 'no-text' });
     const sent = await wa.sendText(phone, text);
     const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
-    if (preguntaId) daniela.resolvePendingQuestion(preguntaId);
+    if (preguntaId) resolvePendingQuestion(preguntaId);
     return res.json({ ok: true, messageId: messageId || null });
   } catch (e) {
     console.error('Error en /deliver-answer:', e.message);
