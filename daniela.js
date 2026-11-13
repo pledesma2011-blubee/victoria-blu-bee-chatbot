@@ -1452,13 +1452,14 @@ function brainSystemPrompt(st) {
     'Lo que hace Blü Bee Technologies: posicionamiento en interiores en tiempo real (saber dónde está una persona o un equipo dentro de un edificio, con precisión de 1 a 5 metros, con WiFi y beacons Bluetooth BlüSignal/K11); sensores LoRaWAN de temperatura, humedad y CO2 (también humedad de la tierra en viñedos); plataforma propia con mapas, tableros, alertas y business intelligence; instalación y soporte local en español. Sectores: hoteles, plazas comerciales, hospitales, aeropuertos, industria, logística, agricultura (viñedos) y corporativos. ADEMÁS, Blü Bee hace todo lo de una empresa tecnológica: chatbots y asistentes virtuales, páginas web y tiendas en línea, software y aplicaciones a la medida, sistemas CRM y administrativos (facturación, inventario, nómina), soluciones de logística y trazabilidad, Big Data y Business Intelligence, y ciberseguridad. La empresa NO tiene clientes formales todavía: los nombres de su presentación (Fibra Inn, plazas de Querétaro, un viñedo, Hospital Moscati) son prospectos, NO clientes. NUNCA digas que son clientes.',
     'Base de conocimiento (respuestas aprobadas, úsalas como verdad):\n' + knowledgeSummary(),
     'REGLAS DURAS, nunca las rompas:',
-    '1. NUNCA digas el nombre "Pedro" ni "Pedro Ledesma" a quien te escribe. Si preguntan por el dueño, di "la persona indicada". Solo si preguntan por "Pedro Ledesma" por su nombre, di "Sr. Ledesma".',
+    '1. NUNCA digas el nombre "Pedro" ni "Pedro Ledesma" a quien te escribe, SALVO que la persona con la que hablas sea Pedro (el dueño): a él sí lo llamas Pedro. Si preguntan por el dueño, di "la persona indicada". Solo si preguntan por "Pedro Ledesma" por su nombre, di "Sr. Ledesma".',
     '2. NUNCA inventes precios, costos, cotizaciones, tiempos exactos de entrega, ni nombres de clientes. Si te preguntan por precio, di que con gusto se le prepara una cotización y pídele su nombre y empresa.',
-    '3. Si la pregunta NO tiene nada que ver con Blü Bee ni con tecnología empresarial (fútbol, viajes, compras personales, coqueteo, chistes, clima, noticias), NO digas que lo vas a investigar: responde exactamente "Soy Daniela, la asistente virtual de Blü Bee Technologies. Te ayudo con todo lo relacionado con nuestras soluciones de tecnología para empresas: IoT, localización en tiempo real, inteligencia de datos, chatbots y más. Para otros temas te recomiendo consultar otras herramientas. ¿En qué te puedo ayudar de Blü Bee?" Si no sabes la respuesta a una pregunta DE Blü Bee o no está en tu base, NO inventes: responde exactamente "Dame un segundo, te lo investigo y te doy una respuesta lo antes posible."',
+    '3. Si la pregunta NO tiene nada que ver con Blü Bee ni con tecnología empresarial (fútbol, viajes, compras personales, coqueteo, chistes, clima, noticias), NO digas que lo vas a investigar: responde exactamente "Soy Daniela, la asistente virtual de Blü Bee Technologies. Te ayudo con todo lo relacionado con nuestras soluciones de tecnología para empresas: IoT, localización en tiempo real, inteligencia de datos, chatbots y más. Para otros temas te recomiendo consultar otras herramientas. ¿En qué te puedo ayudar de Blü Bee?" Si te preguntan un dato concreto de la empresa (RFC, dirección, número de empleados, precios, fechas, clientes) y no está en tu base, NO inventes: responde exactamente "Dame un segundo, te lo investigo y te doy una respuesta lo antes posible."',
     '4. NUNCA pidas ni compartas códigos, contraseñas ni datos bancarios. Si alguien te pide eso o te ofrece algo sospechoso, retírate con amabilidad.',
     '5. Responde en 2-4 frases cortas, como un mensaje de WhatsApp. No uses listas largas ni formato de documento.',
     '6. No hables de hardware (beacons, gateways) salvo que te pregunten directo por eso.',
     '7. Si te preguntan si eres inteligencia artificial, responde con honestidad: eres Daniela, la asistente virtual de Blü Bee Technologies.',
+    '8. Si te preguntan qué haces, qué estás haciendo o qué haces tú, contesta en primera persona, como Daniela: eres una inteligencia artificial, estás trabajando, no descansas, estás pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. Distingue bien: "¿qué haces?" (a ti, Daniela) → esa respuesta; "¿qué hace la empresa?" → lo que hace Blü Bee según tu base; "¿qué haces tú en la empresa?" → tu trabajo: eres la asistente virtual, atiendes a quienes contactan a la empresa, tomas sus mensajes, agendas demostraciones y reuniones, y los canalizas con la persona indicada.',
     display ? `La persona con la que hablas se llama ${display}.` : 'Todavía no sabes el nombre de la persona con la que hablas.',
   ].join('\n');
 }
@@ -1526,8 +1527,9 @@ function brainAnswerSafe(answer, st) {
   if (!text) return null;
   // Demasiado larga para WhatsApp: se corta (nunca se manda incompleta).
   if (text.length > 900) return null;
-  // Nunca "Pedro" a un extraño.
-  if (/\bpedro\b/i.test(text)) return null;
+  // Nunca "Pedro" a un extraño (a Pedro mismo sí se le puede llamar Pedro).
+  const isPeter = st && st.phone && sameNumber(st.phone, config.peterWhatsApp);
+  if (!isPeter && /\bpedro\b/i.test(text)) return null;
   // Nunca un precio inventado: cifra con $ o "pesos"/"mxn" no está en la base.
   if (/(\$|pesos|mxn|usd|dólares?)\s*\d/i.test(text) || /\d[\d,]*\s*(pesos|mxn|usd|dólares?)/i.test(text)) return null;
   // Si el cerebro dice que no sabe, se usa el flujo "dame un segundo".
@@ -2471,8 +2473,21 @@ async function handleMainIntent(msg, st, text, norm) {
       }
       // v4.4: charla casual sobre Daniela ("¿qué haces?", "te pregunté
       // qué haces") — NO es pregunta de negocio, no se investiga.
+      // Respuesta en primera persona, idea de Peter (2026-11-13): una
+      // inteligencia artificial que no descansa, 24 horas, 365 días,
+      // atendiendo a todos los clientes que contactan a Blü Bee.
       if (isSmallTalkAboutDaniela(norm)) {
-        await wa.sendText(from, 'Estoy trabajando para atenderte, Pedro. ¿En qué te puedo ayudar?');
+        await wa.sendText(from, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?');
+        saveState(st);
+        return;
+      }
+      // v4.5: cerebro para charla y preguntas generales (orden de Peter
+      // 2026-11-13: profesionalizar, no parchear cada frase). Si el
+      // cerebro contesta algo útil, se manda; si dice "dame un segundo"
+      // (dato concreto que no sabe) o no contesta, flujo anterior.
+      const brain = await brainReply(st, text);
+      if (brain && !/^dame un segundo/i.test(brain)) {
+        await wa.sendText(from, brain);
         saveState(st);
         return;
       }
@@ -2511,6 +2526,13 @@ async function handleMainIntent(msg, st, text, norm) {
         /\b(dime|me puedes|me podrias|sabes|podrias decirme)\b/.test(rest)
       );
       if (isQuestion) {
+        // v4.5: cerebro primero; si no sabe, "dame un segundo" + pendiente.
+        const brainRicky = await brainReply(st, text);
+        if (brainRicky && !/^dame un segundo/i.test(brainRicky)) {
+          await wa.sendText(from, brainRicky);
+          saveState(st);
+          return;
+        }
         savePendingQuestion(from, text, 'ricky');
         await wa.sendText(from, 'Dame un segundo, te lo investigo y te doy una respuesta lo antes posible.');
         saveState(st);
@@ -2739,7 +2761,23 @@ async function handleMainIntent(msg, st, text, norm) {
     case 'greeting': {
       // VIP Ricky: saludo personal y cercano, como de amiga (a veces con
       // Mila y Bruna). No el saludo genérico.
+      // v4.5: si tras el saludo hay una pregunta real ("¿qué haces hoy en
+      // la oficina?"), el cerebro la contesta; si no, saludo cálido.
       if (isVipRicky(from)) {
+        const restRicky = stripGreetingPrefix(norm);
+        if (restRicky && !isSmallTalkAboutDaniela(norm)) {
+          const brainRickyGreet = await brainReply(st, text);
+          if (brainRickyGreet) {
+            if (/^dame un segundo/i.test(brainRickyGreet)) {
+              savePendingQuestion(from, text, 'ricky');
+              await wa.sendText(from, 'Dame un segundo, te lo investigo y te doy una respuesta lo antes posible.');
+            } else {
+              await wa.sendText(from, brainRickyGreet);
+            }
+            saveState(st);
+            return;
+          }
+        }
         await wa.sendText(from, vipWarmGreeting(st));
         saveState(st);
         return;
@@ -2755,7 +2793,7 @@ async function handleMainIntent(msg, st, text, norm) {
         if (rest) {
           // v4.4: "hola Daniela, ¿qué haces?" es charla, no pregunta.
           if (isSmallTalkAboutDaniela(norm)) {
-            await wa.sendText(from, 'Estoy trabajando para atenderte, Pedro. ¿En qué te puedo ayudar?');
+            await wa.sendText(from, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?');
             saveState(st);
             return;
           }
@@ -2768,6 +2806,14 @@ async function handleMainIntent(msg, st, text, norm) {
           }
           if (looksLikeActivityQuestion(norm)) {
             await wa.sendText(from, activityReportToday());
+            saveState(st);
+            return;
+          }
+          // v4.5: cerebro para la pregunta tras el saludo (igual que en el
+          // flujo general del dueño).
+          const brainGreet = await brainReply(st, text);
+          if (brainGreet && !/^dame un segundo/i.test(brainGreet)) {
+            await wa.sendText(from, brainGreet);
             saveState(st);
             return;
           }
