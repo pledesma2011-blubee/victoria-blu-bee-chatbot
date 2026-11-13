@@ -69,7 +69,7 @@ async function incoming(phone, text) {
   let st = readState(A);
   console.log('\n(a) Contacto nuevo "Hola":');
   check('manda el video de bienvenida', hasKind(m, 'video'));
-  check('pregunta nombre y empresa', hasText(m, /Para atenderle como se merece, ¿me dice su nombre y de qué empresa nos escribe\?/));
+  check('pregunta nombre y correo (v3.6, orden de Peter 2026-11-13)', hasText(m, /¿Con quién tengo el gusto\? ¿Me podrías dar tu nombre para darte un trato especial\? ¿Me compartes tu correo para mandarte más información\?/));
   check('etapa = awaiting_name_company', st && st.stage === 'awaiting_name_company', `stage=${st && st.stage}`);
 
   // ---------- (b) "Quiero saber más de Blü Bee Technologies" -> NO es nombre
@@ -288,6 +288,123 @@ async function incoming(phone, text) {
   check('NO manda el video de bienvenida', !hasKind(m, 'video'));
   check('NO toma "Daniela" como nombre', st && st.name === null, `name=${st && st.name}`);
   check('se trata como mensaje normal (sin reinicio)', st && st.stage === (before && before.stage), `antes=${before && before.stage} ahora=${st && st.stage}`);
+
+  // ---------- (j) Saludos variados (v3.6, orden de Peter 2026-11-13):
+  // Daniela entiende todas las formas de saludar como primer mensaje
+  // ("qué onda", "qué haces", "qué tal", "cómo estás", "disculpa",
+  // "buenas tardes", "buen día", "qué hay"), responde el saludo y pide
+  // nombre + correo. Y un saludo con necesidad NO se traga la necesidad.
+  const GREET_VARIANTS = [
+    ['qué onda', '521111000100'],
+    ['qué haces', '521111000101'],
+    ['qué tal', '521111000102'],
+    ['cómo estás', '521111000103'],
+    ['disculpa', '521111000104'],
+    ['buenas tardes', '521111000105'],
+    ['buen día', '521111000106'],
+    ['qué hay', '521111000107'],
+    ['Hola Daniela, buenos días, ¿cómo estás?', '521111000108'],
+  ];
+  for (const [greet, phone] of GREET_VARIANTS) {
+    mark = sent.length;
+    await incoming(phone, greet);
+    m = since(mark, phone);
+    st = readState(phone);
+    console.log(`\n(j) Primer saludo "${greet}":`);
+    check('responde el saludo y pide nombre + correo', hasText(m, /Hola, mucho gusto\. Soy Daniela, la asistente de Blü Bee Technologies\. ¿Con quién tengo el gusto\? ¿Me podrías dar tu nombre para darte un trato especial\? ¿Me compartes tu correo para mandarte más información\?/));
+    check('etapa = awaiting_name_company', st && st.stage === 'awaiting_name_company', `stage=${st && st.stage}`);
+    check('NO guarda el saludo como nombre', st && st.name === null, `name=${st && st.name}`);
+  }
+
+  // (j2) Saludo + necesidad: la necesidad manda, no se traga la pregunta.
+  const NEED = '521111000109';
+  mark = sent.length;
+  await incoming(NEED, 'hola Daniela, quiero que me ayudes en esto');
+  m = since(mark, NEED);
+  st = readState(NEED);
+  console.log('\n(j2) "hola Daniela, quiero que me ayudes en esto":');
+  check('reconoce la necesidad y pide los datos', hasText(m, /Claro, con gusto te ayudo con eso\. Soy Daniela, la asistente virtual de Blü Bee\. Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes\?/));
+  check('la necesidad queda guardada (pendingNeed)', !!st && !!st.pendingNeed, `pendingNeed=${st && JSON.stringify(st.pendingNeed)}`);
+
+  // (j3) detectIntent directo: cada variante es 'greeting', y un saludo
+  // con necesidad NO es solo saludo.
+  console.log('\n(j3) detectIntent directo:');
+  for (const [greet] of GREET_VARIANTS) {
+    const intent = daniela.detectIntent(greet, greet.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[¡!¿?.,;:()"-]/g, ' ').replace(/\s+/g, ' ').trim());
+    check(`"${greet}" -> greeting`, intent && intent.kind === 'greeting', `intent=${intent && intent.kind}`);
+  }
+  const needIntent = daniela.detectIntent('hola Daniela, quiero que me ayudes en esto', 'hola daniela quiero que me ayudes en esto');
+  check('"hola Daniela, quiero que me ayudes" NO es solo greeting', !needIntent || needIntent.kind !== 'greeting', `intent=${needIntent && needIntent.kind}`);
+
+  // ---------- (k) "Dame un segundo, te lo investigo" para Peter (v3.6,
+  // orden de Peter 2026-11-13): cuando Peter pregunta algo que Daniela no
+  // sabe, ella NO responde solo con un saludo: dice que lo revisa y
+  // guarda la pregunta para Tomás. Y si pregunta por la actividad de hoy
+  // (mensajes/llamadas/clientes), le contesta con el reporte.
+  const PETER_OWNER = '524421447169';
+  // Resetea el estado de Peter a 'main' (las secciones (h)/(i) lo dejan
+  // en handedOff, y en handedOff Daniela ya no le contesta).
+  fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+    phone: PETER_OWNER, stage: 'main', name: 'Pedro', preferredName: 'Pedro',
+    formality: 'usted', handedOff: false,
+  }, null, 2));
+  // Resetea el estado de Ricky a 'main' con su nombre (para (k-d)/(k-e)).
+  const RICKY_OWNER = '5215519518504';
+  fs.writeFileSync(path.join(tmpDir, `${RICKY_OWNER}.json`), JSON.stringify({
+    phone: RICKY_OWNER, stage: 'main', name: 'Ricky', preferredName: 'Ricky',
+    formality: 'tu', handedOff: false,
+  }, null, 2));
+  // (k-a) Saludo simple de Peter: saludo de vuelta, sin pregunta pendiente.
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Hola Daniela, buenos días, ¿cómo estás?');
+  m = since(mark, PETER_OWNER);
+  st = readState(PETER_OWNER);
+  console.log('\n(k-a) Peter: "Hola Daniela, buenos días, ¿cómo estás?":');
+  check('responde el saludo', hasText(m, /Hola Pedro, buenos días\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /cómo estás/.test(q.pregunta)));
+  check('nombre fijado a Pedro', st && st.name === 'Pedro', `name=${st && st.name}`);
+
+  // (k-b) Peter pregunta por la actividad de hoy: reporte (sin clientes hoy).
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'hola Daniela, oye, hemos tenido mensajes de texto hoy, o alguna llamada, o algún contacto de algún cliente?');
+  m = since(mark, PETER_OWNER);
+  console.log('\n(k-b) Peter: "hemos tenido mensajes de texto hoy...?":');
+  check('NO responde solo con el saludo', !hasText(m, /^Hola Pedro, buenos días\. Muy bien, gracias\. ¿En qué le puedo ayudar\?$/));
+  check('da el reporte de actividad de hoy', hasText(m, /Hoy no hemos tenido mensajes de clientes nuevos ni llamadas registradas|Hoy hemos tenido/));
+  check('NO guarda pregunta pendiente (la contestó ella)', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /mensajes de texto hoy/.test(q.pregunta)));
+
+  // (k-c) Peter pregunta algo que Daniela no sabe: "dame un segundo" y
+  // guarda la pregunta para Tomás.
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'oye Daniela, ¿cuál es el pronóstico del clima para mañana en Querétaro?');
+  m = since(mark, PETER_OWNER);
+  console.log('\n(k-c) Peter: pregunta que Daniela no sabe:');
+  check('dice que lo revisa y responde en un momento', hasText(m, /Dame un segundo, lo reviso y te respondo en un momento\./));
+  check('guarda la pregunta para Tomás', daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /pronóstico del clima/.test(q.pregunta)));
+
+  // (k-d) Ricky pregunta algo concreto que Daniela no tiene: "dame un
+  // segundo, te lo investigo".
+  mark = sent.length;
+  await incoming(RICKY_OWNER, '¿cuándo juega el América?');
+  m = since(mark, RICKY_OWNER);
+  console.log('\n(k-d) Ricky: "¿cuándo juega el América?":');
+  check('dice que lo investiga', hasText(m, /Dame un segundo, te lo investigo y te doy una respuesta lo antes posible\./));
+  check('guarda la pregunta para Tomás', daniela.readPendingQuestions().some((q) => q.who === 'ricky' && /cuándo juega el América/.test(q.pregunta)));
+
+  // (k-e) Ricky charla casual ("qué calor hace"): NO se trata como
+  // pregunta, sigue siendo charla cálida.
+  mark = sent.length;
+  await incoming(RICKY_OWNER, 'qué calor hace');
+  m = since(mark, RICKY_OWNER);
+  console.log('\n(k-e) Ricky: "qué calor hace" (charla casual):');
+  check('NO dice que lo investiga', !hasText(m, /Dame un segundo, te lo investigo/));
+  check('responde con calidez (menciona a Ricky)', hasText(m, /Ricky/));
+
+  // (k-f) stripGreetingPrefix: quita el saludo y deja la pregunta.
+  console.log('\n(k-f) stripGreetingPrefix:');
+  check('"hola daniela oye hemos tenido mensajes hoy" -> "hemos tenido mensajes hoy"', daniela.stripGreetingPrefix('hola daniela oye hemos tenido mensajes hoy') === 'hemos tenido mensajes hoy');
+  check('"hola daniela buenos dias como estas" -> ""', daniela.stripGreetingPrefix('hola daniela buenos dias como estas') === '');
+  check('"que onda" -> ""', daniela.stripGreetingPrefix('que onda') === '');
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
