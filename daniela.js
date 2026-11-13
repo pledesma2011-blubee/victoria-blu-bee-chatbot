@@ -1328,6 +1328,139 @@ async function transcribeAudio(filePath) {
   return null;
 }
 
+// ---------- cerebro de IA (v4.0, orden de Peter 2026-11-13) ----------
+// Daniela contesta con reglas (intenciones + base de conocimiento). Cuando
+// no tiene respuesta programada para una pregunta, en vez de quedarse
+// callada le pregunta al cerebro: un modelo de lenguaje (LLM) que entiende
+// cualquier pregunta en español y responde con fluidez, como el chatbot de
+// Kavak. Proveedor principal: Groq (gratis, sin tarjeta; endpoint
+// compatible con OpenAI, modelo llama-3.3-70b-versatile, clave
+// GROQ_API_KEY — la misma que ya usa para transcribir notas de voz).
+// Respaldo: OpenAI (modelo gpt-4o-mini, clave OPENAI_API_KEY).
+// Prioridad: Groq > OpenAI > flujo anterior (avisar a Pedro).
+// Las claves se leen de config/.env y NUNCA se escriben en el código ni
+// en logs. El cerebro SOLO se usa como respaldo cuando no hay intención ni
+// respuesta en la base: los flujos programados (demo, precio, saludo,
+// VIP Ricky, dueño Peter, límites, estafas) siempre mandan y nunca pasan
+// por el cerebro. Las respuestas del cerebro se revisan antes de enviarse:
+// si menciona "Pedro" a un extraño, si inventa un precio, o si dice que
+// no sabe, NO se manda: se usa el flujo anterior ("dame un segundo, te
+// lo investigo" + guardar la pregunta para Tomás).
+
+const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_CHAT_MODEL = 'llama-3.3-70b-versatile';
+const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_CHAT_MODEL = 'gpt-4o-mini';
+
+// Resumen de la base de conocimiento para el cerebro (id + respuesta).
+function knowledgeSummary() {
+  return KNOWLEDGE.map((k) => `- ${k.id}: ${k.answer}`).join('\n');
+}
+
+// Instrucciones fijas del cerebro: quién es Daniela, qué sabe, qué NUNCA
+// debe hacer. El contacto (nombre, empresa, trato) se agrega por mensaje.
+function brainSystemPrompt(st) {
+  const display = contactDisplayName(st);
+  const trato = st.formality === 'tu' ? 'de tú' : 'de usted';
+  return [
+    'Eres Daniela, la secretaria virtual de Blü Bee Technologies, una empresa mexicana de IoT (internet de las cosas). Atiendes por WhatsApp a personas que escriben a la empresa. Hablas siempre en español mexicano, cálida y profesional, y tratas a la persona ' + trato + '.',
+    'Lo que hace Blü Bee Technologies: posicionamiento en interiores en tiempo real (saber dónde está una persona o un equipo dentro de un edificio, con precisión de 1 a 5 metros, con WiFi y beacons Bluetooth BlüSignal/K11); sensores LoRaWAN de temperatura, humedad y CO2 (también humedad de la tierra en viñedos); plataforma propia con mapas, tableros, alertas y business intelligence; instalación y soporte local en español. Sectores: hoteles, plazas comerciales, hospitales, aeropuertos, industria, logística, agricultura (viñedos) y corporativos. La empresa NO tiene clientes formales todavía: los nombres de su presentación (Fibra Inn, plazas de Querétaro, un viñedo, Hospital Moscati) son prospectos, NO clientes. NUNCA digas que son clientes.',
+    'Base de conocimiento (respuestas aprobadas, úsalas como verdad):\n' + knowledgeSummary(),
+    'REGLAS DURAS, nunca las rompas:',
+    '1. NUNCA digas el nombre "Pedro" ni "Pedro Ledesma" a quien te escribe. Si preguntan por el dueño, di "la persona indicada". Solo si preguntan por "Pedro Ledesma" por su nombre, di "Sr. Ledesma".',
+    '2. NUNCA inventes precios, costos, cotizaciones, tiempos exactos de entrega, ni nombres de clientes. Si te preguntan por precio, di que con gusto se le prepara una cotización y pídele su nombre y empresa.',
+    '3. Si no sabes la respuesta o no está en tu base, NO inventes: responde exactamente "Dame un segundo, te lo investigo y te doy una respuesta lo antes posible."',
+    '4. NUNCA pidas ni compartas códigos, contraseñas ni datos bancarios. Si alguien te pide eso o te ofrece algo sospechoso, retírate con amabilidad.',
+    '5. Responde en 2-4 frases cortas, como un mensaje de WhatsApp. No uses listas largas ni formato de documento.',
+    '6. No hables de hardware (beacons, gateways) salvo que te pregunten directo por eso.',
+    '7. Si te preguntan si eres inteligencia artificial, responde con honestidad: eres Daniela, la asistente virtual de Blü Bee Technologies.',
+    display ? `La persona con la que hablas se llama ${display}.` : 'Todavía no sabes el nombre de la persona con la que hablas.',
+  ].join('\n');
+}
+
+// Llama al cerebro contra un endpoint compatible con OpenAI Chat.
+// Devuelve el texto de la respuesta o null si falla.
+async function askBrainWithProvider(endpoint, model, key, messages) {
+  if (!key) return null;
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.3,
+        max_tokens: 400,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`[brain] ${new URL(endpoint).host} ${model} HTTP ${res.status}: ${body.slice(0, 200)}`);
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
+    if (!text) console.error(`[brain] ${new URL(endpoint).host} ${model}: respuesta vacía`);
+    return text || null;
+  } catch (e) {
+    console.error(`[brain] ${new URL(endpoint).host} ${model}:`, e.message);
+    return null;
+  }
+}
+
+async function askBrainWithGroq(messages) {
+  return askBrainWithProvider(GROQ_CHAT_URL, GROQ_CHAT_MODEL, config.groqApiKey, messages);
+}
+
+async function askBrainWithOpenAI(messages) {
+  return askBrainWithProvider(OPENAI_CHAT_URL, OPENAI_CHAT_MODEL, config.openaiApiKey, messages);
+}
+
+// Despachador: Groq (gratis) primero; OpenAI solo si no hay clave de Groq
+// o si Groq falla; null si no hay ninguna clave o ambas fallan.
+async function askBrain(messages) {
+  if (config.groqApiKey) {
+    const groq = await askBrainWithGroq(messages);
+    if (groq) return groq;
+  }
+  if (config.openaiApiKey) return askBrainWithOpenAI(messages);
+  return null;
+}
+
+// Revisa la respuesta del cerebro antes de enviarla. Devuelve el texto
+// listo para mandar, o null si NO se debe mandar (y se usa el flujo
+// anterior). Bloquea: mencionar "Pedro" a un extraño, inventar un precio
+// (cifra con $ o "pesos" que no está en la base), o decir que no sabe
+// (entonces se usa "dame un segundo, te lo investigo").
+function brainAnswerSafe(answer, st) {
+  if (!answer) return null;
+  const text = String(answer).trim();
+  if (!text) return null;
+  // Demasiado larga para WhatsApp: se corta (nunca se manda incompleta).
+  if (text.length > 900) return null;
+  // Nunca "Pedro" a un extraño.
+  if (/\bpedro\b/i.test(text)) return null;
+  // Nunca un precio inventado: cifra con $ o "pesos"/"mxn" no está en la base.
+  if (/(\$|pesos|mxn|usd|dólares?)\s*\d/i.test(text) || /\d[\d,]*\s*(pesos|mxn|usd|dólares?)/i.test(text)) return null;
+  // Si el cerebro dice que no sabe, se usa el flujo "dame un segundo".
+  if (/no (lo )?(sé|sé|se)|no tengo (esa )?información|no puedo (ayudarte|responder)/i.test(text)) return null;
+  return text;
+}
+
+// Pregunta al cerebro por un mensaje de un contacto normal. Devuelve el
+// texto listo para mandar, o null si no se debe usar el cerebro.
+async function brainReply(st, text) {
+  const messages = [
+    { role: 'system', content: brainSystemPrompt(st) },
+    { role: 'user', content: text },
+  ];
+  const raw = await askBrain(messages);
+  return brainAnswerSafe(raw, st);
+}
+
 // ---------- detección de intención (solo texto libre, sin menús) ----------
 
 function detectIntent(text, norm) {
@@ -2145,6 +2278,18 @@ async function handleMainIntent(msg, st, text, norm) {
       saveState(st);
       return;
     }
+    // Cerebro de IA (v4.0, orden de Peter 2026-11-13): si no hay intención
+    // ni respuesta en la base, Daniela le pregunta al cerebro (Groq gratis,
+    // OpenAI de respaldo) y contesta con fluidez, como el chatbot de Kavak.
+    // Solo para contactos normales: Peter y Ricky ya se atendieron arriba.
+    // Si el cerebro no sabe o su respuesta no pasa las guardias, se usa el
+    // flujo anterior (avisar a Pedro y guardar la pregunta).
+    const brain = await brainReply(st, text);
+    if (brain) {
+      await wa.sendText(from, brain);
+      maybeRequestFarewellVideo(st);
+      return;
+    }
     logUnanswered(text);
     await notifyPeter(
       'Mensaje que no es de Blü Bee',
@@ -2545,4 +2690,13 @@ module.exports = {
   stripGreetingPrefix,
   looksLikeActivityQuestion,
   activityReportToday,
+  // Cerebro de IA (v4.0, orden de Peter 2026-11-13): Groq gratis,
+  // OpenAI de respaldo; solo como respaldo cuando no hay intención ni
+  // respuesta en la base.
+  brainSystemPrompt,
+  brainAnswerSafe,
+  brainReply,
+  askBrain,
+  askBrainWithGroq,
+  askBrainWithOpenAI,
 };
