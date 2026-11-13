@@ -543,6 +543,31 @@ function cleanupVideos() {
     check('después pide la identidad de forma natural', hasText(m, /Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes\?/));
     check('etapa = awaiting_name_company', st && st.stage === 'awaiting_name_company', `stage=${st && st.stage}`);
 
+    // ---------- (i-c) Portafolio amplio de servicios (v4.2, orden de Peter
+    // 2026-11-13): Blü Bee no solo hace IoT con beacons, hace todo lo de
+    // una empresa tecnológica. findAnswer directo por tema.
+    console.log('\n(i-c) Portafolio amplio de servicios (v4.2):');
+    const kbCases = [
+      ['¿Hacen chatbots?', 'chatbot'],
+      ['Quiero un chatbot para mi empresa', 'chatbot'],
+      ['¿Hacen páginas web?', 'paginaweb'],
+      ['Quiero una página web', 'paginaweb'],
+      ['¿Hacen ciberseguridad?', 'ciberseguridad'],
+      ['¿Desarrollan software?', 'software'],
+      ['¿Hacen aplicaciones?', 'software'],
+      ['¿Tienen CRM?', 'crm'],
+      ['¿Hacen logística?', 'logistica'],
+      ['¿Hacen sistemas de administración?', 'administracion'],
+      ['¿Trabajan con Big Data?', 'bigdata'],
+      ['¿Hacen análisis de datos?', 'bigdata'],
+      ['¿Hacen trazabilidad?', 'trazabilidad'],
+    ];
+    for (const [q, id] of kbCases) {
+      const ans = conocimiento.findAnswer(q);
+      check(`findAnswer("${q}") = ${id}`, ans && ans.id === id, JSON.stringify(ans && ans.id));
+    }
+    check('"¿qué es Blu Bee?" ahora menciona el portafolio amplio', /chatbots, páginas web, software a la medida/.test((conocimiento.findAnswer('¿qué es Blu Bee?') || {}).answer || ''));
+
     // ---------- (j) Fallback de identidad del video de despedida (v3.3, 2026-11-11)
     // Aprobado por Peter: persona > empresa > genérico. Daniela NUNCA
     // insiste por el nombre: usa lo que le dieron.

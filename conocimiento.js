@@ -213,7 +213,7 @@ const KNOWLEDGE = [
       'a que se dedica blu bee', 'a que se dedica blubee',
       'que ofrece blu bee', 'que ofrece blubee',
     ],
-    answer: 'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Localizamos personas, activos y espacios con beacons, monitoreamos temperatura, humedad y CO2 con sensores, y lo convertimos todo en tableros, mapas y alertas en tiempo real. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.',
+    answer: 'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Localizamos personas, activos y espacios con beacons, monitoreamos temperatura, humedad y CO2 con sensores, y lo convertimos todo en tableros, mapas y alertas en tiempo real. Además, hacemos todo lo de una empresa tecnológica: chatbots, páginas web, software a la medida, CRM, sistemas administrativos, logística, Big Data y ciberseguridad. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.',
     offerVideo: true,
   },
   {
@@ -236,6 +236,91 @@ const KNOWLEDGE = [
       'pila', 'cuando se acaba',
     ],
     answer: 'Los beacons funcionan con batería. Nosotros los monitoreamos desde el tablero: cuando a uno se le acaba la batería, lo reponemos con los mismos identificadores, para que nada se desconfigure. Es parte del servicio de mantenimiento.',
+  },
+  // ---------- portafolio amplio de servicios (v4.2, orden de Peter 2026-11-13) ----------
+  // Blü Bee no solo hace IoT con beacons: hace todo lo de una empresa
+  // tecnológica (chatbots, páginas web, software, CRM, logística,
+  // administración, Big Data, ciberseguridad). Peter lo va a subir al
+  // portafolio de servicios. Cada tema responde con lo que se hace y ofrece
+  // preparar una propuesta. OJO con los plurales: el matching exige la
+  // palabra completa, así que van singular Y plural ("chatbot"/"chatbots").
+  {
+    id: 'chatbot',
+    patterns: [
+      'chatbot', 'chatbots', 'hacen chatbots', 'hacen chatbot',
+      'quiero un chatbot', 'hacer un chatbot', 'asistente virtual',
+      'asistente de whatsapp', 'bot de whatsapp', 'chatbot para mi empresa',
+    ],
+    answer: 'Sí, también creamos chatbots y asistentes virtuales como yo: atienden a sus clientes por WhatsApp, responden preguntas, toman mensajes y agendan citas, 24 horas al día. Si le interesa uno para su empresa, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'paginaweb',
+    patterns: [
+      'pagina web', 'paginas web', 'sitio web', 'sitios web',
+      'hacen paginas web', 'hacen pagina web', 'quiero una pagina web',
+      'desarrollo web', 'tienda en linea', 'ecommerce', 'e-commerce',
+    ],
+    answer: 'Sí, también desarrollamos páginas web y tiendas en línea a la medida de cada empresa: informativas, con catálogo y contacto por WhatsApp, para vender o atender a sus clientes en internet. Si le interesa, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'ciberseguridad',
+    patterns: [
+      'ciberseguridad', 'hacen ciberseguridad', 'seguridad informatica',
+      'seguridad de la informacion', 'proteccion de datos', 'hackeo',
+    ],
+    answer: 'Sí, también trabajamos ciberseguridad: protegemos la información y los sistemas de su empresa contra accesos no autorizados y pérdidas de datos. Si le interesa una revisión de seguridad, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'software',
+    patterns: [
+      'desarrollo de software', 'desarrollan software', 'hacen software',
+      'programacion', 'software a la medida', 'sistema a la medida',
+      'sistemas a la medida', 'aplicacion', 'aplicaciones',
+      'hacen aplicaciones', 'app para mi empresa',
+    ],
+    answer: 'Sí, también desarrollamos software y aplicaciones a la medida: sistemas, aplicaciones móviles y herramientas para que su empresa trabaje mejor. Si nos cuenta qué necesita, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'crm',
+    patterns: [
+      'crm', 'tienen crm', 'hacen crm', 'un crm',
+      'gestion de clientes', 'administracion de clientes',
+    ],
+    answer: 'Sí, también implementamos sistemas CRM para administrar a sus clientes: contactos, seguimiento, ventas y atención, todo en un solo lugar. Si le interesa, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'logistica',
+    patterns: [
+      'logistica', 'hacen logistica', 'rastrear envios',
+      'seguimiento de envios', 'flotilla', 'flota de vehiculos',
+    ],
+    answer: 'Sí, también hacemos soluciones de logística: seguimiento de vehículos y envíos en tiempo real, con mapas, alertas y reportes. Si le interesa para su empresa, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'administracion',
+    patterns: [
+      'sistema administrativo', 'sistemas administrativos',
+      'sistemas de administracion', 'administracion', 'facturacion',
+      'sistema de facturacion', 'inventario', 'control de inventario',
+      'nomina',
+    ],
+    answer: 'Sí, también implementamos sistemas administrativos: facturación, inventario, nómina y control de su empresa, todo en un solo lugar. Si le interesa, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'bigdata',
+    patterns: [
+      'big data', 'hacen big data', 'business intelligence',
+      'inteligencia de negocios', 'analisis de datos', 'tableros de datos',
+    ],
+    answer: 'Sí, también trabajamos con Big Data y Business Intelligence: convertimos los datos de su empresa en tableros, reportes y alertas para que tome mejores decisiones. Si le interesa, con gusto le preparamos una propuesta.',
+  },
+  {
+    id: 'trazabilidad',
+    patterns: [
+      'trazabilidad', 'hacen trazabilidad', 'deteccion',
+      'monitoreo en tiempo real', 'seguimiento en tiempo real',
+    ],
+    answer: 'Sí, también hacemos soluciones de trazabilidad y detección: seguimiento en tiempo real de personas, equipos, vehículos o productos, con alertas cuando algo sale de lo esperado. Si le interesa para su empresa, con gusto le preparamos una propuesta.',
   },
 ];
 

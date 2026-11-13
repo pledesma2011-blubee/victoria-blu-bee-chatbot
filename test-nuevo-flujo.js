@@ -375,12 +375,15 @@ async function incoming(phone, text) {
 
   // (k-c) Peter pregunta algo que Daniela no sabe: "dame un segundo" y
   // guarda la pregunta para Tomás.
+  // (v4.2: antes era el pronóstico del clima, pero el clima ahora es
+  // pregunta fuera de tema y va a la redirección profesional; para probar
+  // el flujo "dame un segundo" se usa una pregunta DE negocio que no sabe.)
   mark = sent.length;
-  await incoming(PETER_OWNER, 'oye Daniela, ¿cuál es el pronóstico del clima para mañana en Querétaro?');
+  await incoming(PETER_OWNER, 'oye Daniela, ¿cuántos empleados tienen?');
   m = since(mark, PETER_OWNER);
   console.log('\n(k-c) Peter: pregunta que Daniela no sabe:');
   check('dice que lo revisa y responde en un momento', hasText(m, /Dame un segundo, lo reviso y te respondo en un momento\./));
-  check('guarda la pregunta para Tomás', daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /pronóstico del clima/.test(q.pregunta)));
+  check('guarda la pregunta para Tomás', daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /empleados/.test(q.pregunta)));
 
   // (k-d) Ricky pregunta algo concreto que Daniela no tiene: "dame un
   // segundo, te lo investigo".
@@ -526,6 +529,62 @@ async function incoming(phone, text) {
   check('incluye el nombre del contacto', /Ana/.test(sysPrompt));
   restoreBrain();
   config.groqApiKey = realGroqKey;
+
+  // ---------- (o) Redirección profesional para preguntas fuera de tema (v4.2,
+  // orden de Peter 2026-11-13): fútbol, viajes, coqueteo, chistes... →
+  // respuesta corta con el alcance, NO "dame un segundo" ni cerebro.
+  // Caso real: Peter preguntó "¿Cuándo juega el Real Madrid?" (10:22) y
+  // Daniela dijo "dame un segundo".
+  console.log('\n(o) Redirección profesional (v4.2):');
+  // (o-a) isOffTopicQuestion directo.
+  check('"¿Sabés de fútbol?" es fuera de tema', daniela.isOffTopicQuestion('sabes de futbol'));
+  check('"¿Cuándo juega el Real Madrid?" es fuera de tema', daniela.isOffTopicQuestion('cuando juega el real madrid'));
+  check('"¿a dónde puedo viajar?" es fuera de tema', daniela.isOffTopicQuestion('a donde puedo viajar'));
+  check('"¿qué sillón compro?" es fuera de tema', daniela.isOffTopicQuestion('que sillon compro'));
+  check('"¿estás guapa?" es fuera de tema', daniela.isOffTopicQuestion('estas guapa'));
+  check('"¿qué hay de nuevo?" NO es fuera de tema (saludo)', !daniela.isOffTopicQuestion('que hay de nuevo'));
+  check('"¿tienen cobertura en América Latina?" NO es fuera de tema', !daniela.isOffTopicQuestion('tienen cobertura en america latina'));
+  check('"¿funciona en mi celular?" NO es fuera de tema', !daniela.isOffTopicQuestion('funciona en mi celular'));
+  check('"¿a qué hora cierran?" NO es fuera de tema', !daniela.isOffTopicQuestion('a que hora cierran'));
+  check('"¿tienen soluciones para restaurantes?" NO es fuera de tema', !daniela.isOffTopicQuestion('tienen soluciones para restaurantes'));
+  check('"¿quién ganó el América?" es fuera de tema', daniela.isOffTopicQuestion('quien gano el america'));
+  // (o-b) Extraño pregunta de fútbol: redirección, NO "dame un segundo".
+  mark = sent.length;
+  await incoming(BRAIN, '¿Cuándo juega el Real Madrid?');
+  m = since(mark, BRAIN);
+  console.log('  (o-b) Extraño: "¿Cuándo juega el Real Madrid?":');
+  check('responde la redirección profesional', hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => /Real Madrid/.test(q.pregunta)));
+  // (o-c) Peter pregunta de fútbol: TAMBIÉN redirección (así prueba al público).
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿Sabés de fútbol?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (o-c) Peter: "¿Sabés de fútbol?":');
+  check('responde la redirección profesional', hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  // (o-d) Peter saluda + pregunta de fútbol: redirección, no "dame un segundo".
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'hola Daniela, ¿sabes de fútbol?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (o-d) Peter: "hola Daniela, ¿sabes de fútbol?":');
+  check('responde la redirección profesional', hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  // (o-e) Ricky pregunta de fútbol: EXENTO (VIP: con él se platica de todo).
+  mark = sent.length;
+  await incoming(RICKY_OWNER, '¿Cuándo juega el América?');
+  m = since(mark, RICKY_OWNER);
+  console.log('  (o-e) Ricky: "¿Cuándo juega el América?" (VIP exento):');
+  check('NO recibe la redirección profesional', !hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
+  // (o-f) Pregunta de negocio de Peter: sigue yendo a "dame un segundo".
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿cuál es el RFC de la empresa?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (o-f) Peter: pregunta de negocio que no sabe:');
+  check('dice "dame un segundo"', hasText(m, /Dame un segundo, lo reviso/));
+  // (o-g) El cerebro también lleva la regla de redirección.
+  check('brainSystemPrompt incluye la redirección fuera de tema', /Para otros temas te recomiendo consultar otras herramientas/.test(sysPrompt));
+  check('brainSystemPrompt incluye el portafolio amplio', /chatbots y asistentes virtuales/.test(sysPrompt));
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');

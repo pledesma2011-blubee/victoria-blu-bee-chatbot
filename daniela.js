@@ -1357,6 +1357,64 @@ function knowledgeSummary() {
   return KNOWLEDGE.map((k) => `- ${k.id}: ${k.answer}`).join('\n');
 }
 
+// ---------- redirección profesional para preguntas fuera de tema (v4.2) ----------
+// Orden de Peter 2026-11-13: ante preguntas que NO tienen nada que ver con
+// Blü Bee ni con tecnología empresarial (fútbol, viajes, compras personales,
+// coqueteo, chistes, clima, noticias), Daniela NO dice "dame un segundo, te
+// lo investigo" ni le pregunta al cerebro: responde corto, con su alcance, y
+// vuelve a ofrecer lo de Blü Bee. Como el chatbot de Kavak: sabe lo que hace
+// y lo dice con seguridad. Aplica a todos MENOS a Ricky (VIP: con él Daniela
+// platica de fútbol y de todo, como amiga y socia — orden permanente de
+// Peter). Peter TAMBIÉN recibe la redirección cuando pregunta fuera de tema:
+// así prueba cómo trata Daniela al público (caso real 2026-11-13: preguntó
+// "¿Cuándo juega el Real Madrid?" y Daniela dijo "dame un segundo").
+const OFF_TOPIC_REPLY = 'Soy Daniela, la asistente virtual de Blü Bee Technologies. Te ayudo con todo lo relacionado con nuestras soluciones de tecnología para empresas: IoT, localización en tiempo real, inteligencia de datos, chatbots y más. Para otros temas te recomiendo consultar otras herramientas. ¿En qué te puedo ayudar de Blü Bee?';
+
+// Solo palabras que NO se traslapan con preguntas de negocio:
+// - 'america' solo cuenta con contexto de fútbol (un prospecto puede
+//   preguntar por cobertura en América Latina).
+// - 'celular', 'restaurante', 'hotel' NO están: pueden ser preguntas de
+//   negocio ("¿funciona en mi celular?", "¿tienen soluciones para
+//   restaurantes/hoteles?").
+// - 'que hora' NO está: "¿a qué hora cierran?" es pregunta de negocio.
+const OFF_TOPIC_PATTERNS = [
+  // Deportes
+  'futbol', 'fútbol', 'futboll', 'soccer', 'mundial', 'liga mx',
+  'real madrid', 'chivas', 'cruz azul', 'pumas', 'tigres', 'rayados',
+  'barcelona', 'partido', 'gol', 'goleador', 'aguilas', 'águilas',
+  // Viajes y ocio
+  'viajar', 'vacaciones', 'playa', 'turismo', 'pasaje',
+  // Compras personales / hogar
+  'sillon', 'sillón', 'sofa', 'sofá', 'mueble', 'ropa', 'zapatos',
+  // Personal / coqueteo
+  'guapa', 'bonita', 'hermosa', 'linda', 'novia', 'novio', 'casada',
+  'casado', 'soltera', 'soltero', 'te amo', 'te quiero', 'te ves',
+  // Entretenimiento
+  'pelicula', 'película', 'netflix', 'cancion', 'canción', 'musica',
+  'música', 'chiste', 'broma', 'cuentame un chiste', 'cuéntame un chiste',
+  // Clima / general
+  'clima', 'pronostico', 'pronóstico', 'llover', 'lluvia',
+  'que dia es', 'qué día es',
+  // Comida
+  'receta', 'cocinar', 'cocina',
+  // Salud
+  'dolor', 'enfermedad', 'medicina', 'doctor', 'covid',
+  // Finanzas personales
+  'prestamo', 'préstamo', 'credito', 'crédito', 'bitcoin', 'cripto',
+  // Noticias / política
+  'noticias', 'politica', 'política', 'presidente', 'elecciones',
+  // Otros
+  'horoscopo', 'horóscopo', 'loteria', 'lotería',
+];
+
+function isOffTopicQuestion(norm) {
+  if (!norm) return false;
+  if (OFF_TOPIC_PATTERNS.some((p) => norm.includes(p))) return true;
+  // 'america' solo con contexto de fútbol (no confundir con cobertura).
+  if (norm.includes('america') && /(equipo|juega|juego|gano|ganó|partido|futbol|fútbol|aguilas|águilas|club)/.test(norm)) return true;
+  return false;
+}
+
 // Instrucciones fijas del cerebro: quién es Daniela, qué sabe, qué NUNCA
 // debe hacer. El contacto (nombre, empresa, trato) se agrega por mensaje.
 function brainSystemPrompt(st) {
@@ -1364,12 +1422,12 @@ function brainSystemPrompt(st) {
   const trato = st.formality === 'tu' ? 'de tú' : 'de usted';
   return [
     'Eres Daniela, la secretaria virtual de Blü Bee Technologies, una empresa mexicana de IoT (internet de las cosas). Atiendes por WhatsApp a personas que escriben a la empresa. Hablas siempre en español mexicano, cálida y profesional, y tratas a la persona ' + trato + '.',
-    'Lo que hace Blü Bee Technologies: posicionamiento en interiores en tiempo real (saber dónde está una persona o un equipo dentro de un edificio, con precisión de 1 a 5 metros, con WiFi y beacons Bluetooth BlüSignal/K11); sensores LoRaWAN de temperatura, humedad y CO2 (también humedad de la tierra en viñedos); plataforma propia con mapas, tableros, alertas y business intelligence; instalación y soporte local en español. Sectores: hoteles, plazas comerciales, hospitales, aeropuertos, industria, logística, agricultura (viñedos) y corporativos. La empresa NO tiene clientes formales todavía: los nombres de su presentación (Fibra Inn, plazas de Querétaro, un viñedo, Hospital Moscati) son prospectos, NO clientes. NUNCA digas que son clientes.',
+    'Lo que hace Blü Bee Technologies: posicionamiento en interiores en tiempo real (saber dónde está una persona o un equipo dentro de un edificio, con precisión de 1 a 5 metros, con WiFi y beacons Bluetooth BlüSignal/K11); sensores LoRaWAN de temperatura, humedad y CO2 (también humedad de la tierra en viñedos); plataforma propia con mapas, tableros, alertas y business intelligence; instalación y soporte local en español. Sectores: hoteles, plazas comerciales, hospitales, aeropuertos, industria, logística, agricultura (viñedos) y corporativos. ADEMÁS, Blü Bee hace todo lo de una empresa tecnológica: chatbots y asistentes virtuales, páginas web y tiendas en línea, software y aplicaciones a la medida, sistemas CRM y administrativos (facturación, inventario, nómina), soluciones de logística y trazabilidad, Big Data y Business Intelligence, y ciberseguridad. La empresa NO tiene clientes formales todavía: los nombres de su presentación (Fibra Inn, plazas de Querétaro, un viñedo, Hospital Moscati) son prospectos, NO clientes. NUNCA digas que son clientes.',
     'Base de conocimiento (respuestas aprobadas, úsalas como verdad):\n' + knowledgeSummary(),
     'REGLAS DURAS, nunca las rompas:',
     '1. NUNCA digas el nombre "Pedro" ni "Pedro Ledesma" a quien te escribe. Si preguntan por el dueño, di "la persona indicada". Solo si preguntan por "Pedro Ledesma" por su nombre, di "Sr. Ledesma".',
     '2. NUNCA inventes precios, costos, cotizaciones, tiempos exactos de entrega, ni nombres de clientes. Si te preguntan por precio, di que con gusto se le prepara una cotización y pídele su nombre y empresa.',
-    '3. Si no sabes la respuesta o no está en tu base, NO inventes: responde exactamente "Dame un segundo, te lo investigo y te doy una respuesta lo antes posible."',
+    '3. Si la pregunta NO tiene nada que ver con Blü Bee ni con tecnología empresarial (fútbol, viajes, compras personales, coqueteo, chistes, clima, noticias), NO digas que lo vas a investigar: responde exactamente "Soy Daniela, la asistente virtual de Blü Bee Technologies. Te ayudo con todo lo relacionado con nuestras soluciones de tecnología para empresas: IoT, localización en tiempo real, inteligencia de datos, chatbots y más. Para otros temas te recomiendo consultar otras herramientas. ¿En qué te puedo ayudar de Blü Bee?" Si no sabes la respuesta a una pregunta DE Blü Bee o no está en tu base, NO inventes: responde exactamente "Dame un segundo, te lo investigo y te doy una respuesta lo antes posible."',
     '4. NUNCA pidas ni compartas códigos, contraseñas ni datos bancarios. Si alguien te pide eso o te ofrece algo sospechoso, retírate con amabilidad.',
     '5. Responde en 2-4 frases cortas, como un mensaje de WhatsApp. No uses listas largas ni formato de documento.',
     '6. No hables de hardware (beacons, gateways) salvo que te pregunten directo por eso.',
@@ -2215,6 +2273,16 @@ async function handleMainIntent(msg, st, text, norm) {
       maybeRequestFarewellVideo(st);
       return;
     }
+    // Redirección profesional (v4.2, orden de Peter 2026-11-13): pregunta
+    // fuera de tema → respuesta corta con el alcance, NO "dame un segundo"
+    // ni cerebro. Aplica a todos menos a Ricky (VIP: con él se platica de
+    // todo). Peter TAMBIÉN la recibe cuando pregunta fuera de tema.
+    if (!isVipRicky(from) && isOffTopicQuestion(norm)) {
+      await wa.sendText(from, OFF_TOPIC_REPLY);
+      maybeRequestFarewellVideo(st);
+      saveState(st);
+      return;
+    }
     // Dueño — Peter (el jefe, orden 2026-11-13): Daniela SIEMPRE le
     // contesta a Peter, de todo. Un saludo o mensaje de Peter nunca es
     // "no es de Blü Bee" y nunca se le notifica a él mismo como aviso.
@@ -2474,6 +2542,13 @@ async function handleMainIntent(msg, st, text, norm) {
       if (sameNumber(from, config.peterWhatsApp)) {
         const rest = stripGreetingPrefix(norm);
         if (rest) {
+          // v4.2: saludo + pregunta fuera de tema ("hola Daniela, ¿sabes de
+          // fútbol?") → redirección profesional, no "dame un segundo".
+          if (isOffTopicQuestion(norm)) {
+            await wa.sendText(from, OFF_TOPIC_REPLY);
+            saveState(st);
+            return;
+          }
           if (looksLikeActivityQuestion(norm)) {
             await wa.sendText(from, activityReportToday());
             saveState(st);
@@ -2707,4 +2782,9 @@ module.exports = {
   askBrain,
   askBrainWithGroq,
   askBrainWithOpenAI,
+  // Redirección profesional (v4.2, orden de Peter 2026-11-13): preguntas
+  // fuera de tema (fútbol, viajes, coqueteo...) → respuesta corta con el
+  // alcance, no "dame un segundo" ni cerebro. Aplica a todos menos Ricky.
+  isOffTopicQuestion,
+  OFF_TOPIC_REPLY,
 };
