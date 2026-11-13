@@ -405,6 +405,23 @@ async function incoming(phone, text) {
   check('"hola daniela oye hemos tenido mensajes hoy" -> "hemos tenido mensajes hoy"', daniela.stripGreetingPrefix('hola daniela oye hemos tenido mensajes hoy') === 'hemos tenido mensajes hoy');
   check('"hola daniela buenos dias como estas" -> ""', daniela.stripGreetingPrefix('hola daniela buenos dias como estas') === '');
   check('"que onda" -> ""', daniela.stripGreetingPrefix('que onda') === '');
+  // (k-f2) Continuaciones de saludo (v4.1, caso real 2026-11-13): Peter
+  // saludó "hola Daniela, ¿cómo estás? ¿qué onda? ¿qué haces?" y la
+  // transcripción dejó "todo bien" al final; eso NO es una pregunta.
+  check('"...que haces todo bien" -> ""', daniela.stripGreetingPrefix('hola daniela como estas que onda que haces todo bien') === '');
+  check('"...que haces como te va" -> ""', daniela.stripGreetingPrefix('hola daniela como estas que onda que haces como te va') === '');
+  check('"que onda que hay de nuevo" -> ""', daniela.stripGreetingPrefix('hola daniela que onda que hay de nuevo') === '');
+  check('pregunta real tras el saludo NO se borra', daniela.stripGreetingPrefix('hola daniela como estas que onda que haces cual es el pronostico del clima') === 'cual es el pronostico del clima');
+
+  // (k-g) Peter saluda con continuación ("todo bien"): Daniela saluda de
+  // vuelta, NO dice "dame un segundo".
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'hola Daniela, ¿cómo estás? ¿qué onda? ¿qué haces? ¿todo bien?');
+  m = since(mark, PETER_OWNER);
+  console.log('\n(k-g) Peter: saludo con "¿todo bien?" al final:');
+  check('responde el saludo', hasText(m, /Hola Pedro, buenos días\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /todo bien/.test(q.pregunta)));
 
   // ---------- (l) Cerebro de IA (v4.0, orden de Peter 2026-11-13):
   // cuando no hay intención ni respuesta en la base, Daniela le pregunta
