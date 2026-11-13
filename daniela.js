@@ -1775,10 +1775,12 @@ async function handleMessage(msg) {
 
   // Texto del mensaje (o texto del botón que tocó, por compatibilidad)
   let text = '';
+  let fromVoice = false;
   if (msg.type === 'text') text = msg.text.body || '';
   else if (msg.type === 'interactive' && msg.interactive?.button_reply) {
     text = msg.interactive.button_reply.title || '';
   } else if (msg.type === 'audio' || msg.type === 'voice') {
+    fromVoice = true;
     // Nota de voz: transcribirla con Whisper (Groq gratis primero; OpenAI
     // de respaldo) y procesarla como texto. Sin ninguna clave, Daniela pide
     // amablemente que le escriban el mensaje.
@@ -1807,6 +1809,16 @@ async function handleMessage(msg) {
   }
 
   const norm = normalize(text);
+
+  // (v4.7, orden de Peter 2026-11-13): si en una nota de voz se mete otra
+  // voz (la tele, otras personas) y el texto no queda claro, Daniela pide
+  // que se lo repitan en vez de adivinar o decir "dame un segundo". No se
+  // guarda pregunta pendiente: no hay nada que investigar, hay que repetir.
+  if (fromVoice && looksGarbledTranscription(text, norm)) {
+    await wa.sendText(from, garbledVoiceReply(st));
+    saveState(st);
+    return;
+  }
 
   // VIP Ricky (orden de Peter 2026-11-11): Daniela SIEMPRE le contesta a
   // Ricky, TODO. Si el mensaje son solo emojis, le responde con el video
@@ -2983,6 +2995,29 @@ function isSmallTalkAboutDaniela(norm) {
   return true;
 }
 
+// ¿La transcripción de una nota de voz viene mezclada con otra voz (tele,
+// otras personas) y no se entiende qué pidieron? (v4.7, orden de Peter
+// 2026-11-13: "si se mete otra voz... puede pedir que se lo repita ya que
+// no se escucha bien el mensaje"). Señal: "..." de la transcripción, sin
+// intención clara, sin respuesta en la base, sin charla reconocible y sin
+// palabras de negocio. Si la pregunta real sí se reconoce (charla,
+// intención o base), NO es texto confuso: se atiende normal.
+function looksGarbledTranscription(text, norm) {
+  if (!text || !/\.\.\./.test(text)) return false;
+  if (isSmallTalkAboutDaniela(norm)) return false;
+  if (detectIntent(text, norm)) return false;
+  if (findAnswer(text)) return false;
+  if (BUSINESS_WORDS.some((w) => ` ${norm} `.includes(` ${w} `))) return false;
+  return true;
+}
+
+// Respuesta cuando no se entendió una nota de voz por ruido de fondo.
+function garbledVoiceReply(st) {
+  return st.formality === 'tu'
+    ? 'Perdón, no te escuché bien, se coló otro ruido en tu nota de voz. ¿Me lo puedes repetir, por favor?'
+    : 'Perdón, no le escuché bien, se coló otro ruido en su nota de voz. ¿Me lo puede repetir, por favor?';
+}
+
 // ¿Peter pregunta por la actividad de hoy (mensajes, llamadas, clientes)?
 // Daniela revisa leads.json y los estados de hoy y le reporta.
 function looksLikeActivityQuestion(norm) {
@@ -3089,6 +3124,10 @@ module.exports = {
   isSmallTalkAboutDaniela,
   looksLikeActivityQuestion,
   activityReportToday,
+  // Nota de voz con ruido de fondo (v4.7, orden de Peter 2026-11-13):
+  // si se mete otra voz y el texto no queda claro, pide repetir.
+  looksGarbledTranscription,
+  garbledVoiceReply,
   // Cerebro de IA (v4.0, orden de Peter 2026-11-13): Groq gratis,
   // OpenAI de respaldo; solo como respaldo cuando no hay intención ni
   // respuesta en la base.
