@@ -406,6 +406,110 @@ async function incoming(phone, text) {
   check('"hola daniela buenos dias como estas" -> ""', daniela.stripGreetingPrefix('hola daniela buenos dias como estas') === '');
   check('"que onda" -> ""', daniela.stripGreetingPrefix('que onda') === '');
 
+  // ---------- (l) Cerebro de IA (v4.0, orden de Peter 2026-11-13):
+  // cuando no hay intención ni respuesta en la base, Daniela le pregunta
+  // al cerebro (Groq) y contesta con fluidez. Las respuestas del cerebro
+  // se revisan: si menciona "Pedro" a un extraño, si inventa un precio,
+  // o si dice que no sabe, NO se mandan y se usa el flujo anterior.
+  // En el entorno de pruebas no hay clave de Groq, así que se pone una
+  // falsa y se simula fetch para controlar lo que responde el cerebro.
+  console.log('\n(l) Cerebro de IA:');
+  const realFetch = global.fetch;
+  const realGroqKey = config.groqApiKey;
+  config.groqApiKey = 'test-fake-key';
+  function mockBrain(content) {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content } }] }),
+    });
+  }
+  function mockBrainFail() {
+    global.fetch = async () => { throw new Error('red caída'); };
+  }
+  function restoreBrain() {
+    global.fetch = realFetch;
+  }
+  // Contacto normal en etapa main, sin nombre, para probar el cerebro.
+  const BRAIN = '521111000200';
+  function resetBrainState() {
+    fs.writeFileSync(path.join(tmpDir, `${BRAIN}.json`), JSON.stringify({
+      phone: BRAIN, stage: 'main', name: null, preferredName: null,
+      formality: 'usted', handedOff: false,
+    }, null, 2));
+  }
+  resetBrainState();
+
+  // (l-a) El cerebro responde una pregunta sin intención ni base: Daniela
+  // manda la respuesta del cerebro y NO avisa a Pedro.
+  mockBrain('La inteligencia artificial es un programa que aprende de datos y ayuda a automatizar tareas. En Blü Bee la usamos para que Daniela atienda por WhatsApp.');
+  resetBrainState();
+  mark = sent.length;
+  await incoming(BRAIN, '¿qué es la inteligencia artificial?');
+  m = since(mark, BRAIN);
+  console.log('  (l-a) Cerebro responde pregunta sin base:');
+  check('manda la respuesta del cerebro', hasText(m, /La inteligencia artificial es un programa que aprende/));
+  check('NO avisa a Pedro', notices(since(mark, PETER)).length === 0, JSON.stringify(notices(since(mark, PETER))));
+
+  // (l-b) El cerebro menciona "Pedro" a un extraño: bloqueado, avisa a Pedro.
+  mockBrain('Pedro es el dueño de Blü Bee y le puede atender personalmente.');
+  resetBrainState();
+  mark = sent.length;
+  await incoming(BRAIN, '¿quién es el dueño de la empresa?');
+  m = since(mark, BRAIN);
+  console.log('  (l-b) Cerebro menciona "Pedro" a un extraño:');
+  check('NO manda la respuesta del cerebro', !hasText(m, /Pedro es el dueño/));
+  check('avisa a Pedro (flujo anterior)', notices(since(mark, PETER)).length > 0);
+
+  // (l-c) El cerebro inventa un precio: bloqueado, avisa a Pedro.
+  mockBrain('La instalación cuesta $50,000 pesos y tarda 2 semanas.');
+  resetBrainState();
+  mark = sent.length;
+  await incoming(BRAIN, '¿cuánto tiempo llevan en el mercado?');
+  m = since(mark, BRAIN);
+  console.log('  (l-c) Cerebro inventa un precio:');
+  check('NO manda el precio inventado', !hasText(m, /\$50,000/));
+  check('avisa a Pedro (flujo anterior)', notices(since(mark, PETER)).length > 0);
+
+  // (l-d) El cerebro dice que no sabe: no se manda, avisa a Pedro.
+  mockBrain('No tengo esa información, lo siento.');
+  resetBrainState();
+  mark = sent.length;
+  await incoming(BRAIN, '¿cuál es la capital de Australia?');
+  m = since(mark, BRAIN);
+  console.log('  (l-d) Cerebro dice que no sabe:');
+  check('NO manda el "no sé" del cerebro', !hasText(m, /No tengo esa información/));
+  check('avisa a Pedro (flujo anterior)', notices(since(mark, PETER)).length > 0);
+
+  // (l-e) El cerebro falla (red caída): no se rompe nada, avisa a Pedro.
+  mockBrainFail();
+  resetBrainState();
+  mark = sent.length;
+  await incoming(BRAIN, '¿qué es un sensor?');
+  m = since(mark, BRAIN);
+  console.log('  (l-e) El cerebro falla:');
+  check('no se cae (avisa a Pedro)', notices(since(mark, PETER)).length > 0);
+
+  // (l-f) brainAnswerSafe directo: reglas de guardia.
+  console.log('  (l-f) brainAnswerSafe directo:');
+  const stBrain = { formality: 'usted', name: null, preferredName: null };
+  check('respuesta normal pasa', daniela.brainAnswerSafe('Claro, con gusto le ayudo.', stBrain) === 'Claro, con gusto le ayudo.');
+  check('"Pedro" bloqueado', daniela.brainAnswerSafe('Pedro te atiende.', stBrain) === null);
+  check('precio inventado bloqueado', daniela.brainAnswerSafe('Cuesta $10,000 pesos.', stBrain) === null);
+  check('"no sé" bloqueado', daniela.brainAnswerSafe('No sé la respuesta.', stBrain) === null);
+  check('respuesta vacía bloqueada', daniela.brainAnswerSafe('', stBrain) === null);
+  check('respuesta muy larga bloqueada', daniela.brainAnswerSafe('x'.repeat(901), stBrain) === null);
+
+  // (l-g) El sistema del cerebro nunca revela a Pedro ni inventa clientes.
+  console.log('  (l-g) brainSystemPrompt:');
+  const sysPrompt = daniela.brainSystemPrompt({ formality: 'usted', name: 'Ana', preferredName: 'Ana' });
+  check('dice quién es Daniela', /secretaria virtual de Blü Bee Technologies/.test(sysPrompt));
+  check('prohíbe decir Pedro', /NUNCA digas el nombre "Pedro"/.test(sysPrompt));
+  check('prohíbe inventar precios', /NUNCA inventes precios/.test(sysPrompt));
+  check('prohíbe inventar clientes', /NO tiene clientes formales|son prospectos, NO clientes/.test(sysPrompt));
+  check('incluye el nombre del contacto', /Ana/.test(sysPrompt));
+  restoreBrain();
+  config.groqApiKey = realGroqKey;
+
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
   console.log('\n(verificación global):');
