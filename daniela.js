@@ -205,6 +205,9 @@ const NAME_BLOCK_WORDS = new Set([
   // "Hola Daniela, buenos días, ¿cómo estás?" guardó "Cómo Estás" como
   // nombre). 'como', 'estas', 'tal', 'bien', 'que' no son nombres.
   'como', 'estas', 'tal', 'bien', 'que',
+  // Otras formas de saludar que tampoco son nombres (v3.6, orden de Peter
+  // 2026-11-13): "qué onda", "qué haces", "disculpa", "qué hay", "buen día".
+  'onda', 'haces', 'disculpa', 'hay', 'buen', 'dia',
 ]);
 
 // Diminutivos y cariños con los que la gente se dirige a Daniela (v3.1,
@@ -1341,6 +1344,18 @@ function detectIntent(text, norm) {
     if (contains(text, [sector])) return { kind: 'sector', key: sector };
   }
   if (contains(text, ['informacion', 'info', 'soluciones', 'que hacen', 'que ofrece', 'servicios', 'iot', 'blu bee', 'blubee'])) return { kind: 'info' };
+  // Saludos (v3.6, orden de Peter 2026-11-13): Daniela entiende todas las
+  // formas de saludar como primer mensaje, no solo "hola": qué onda, qué
+  // haces, qué tal, cómo estás, disculpa, buen día, qué hay. Vale que el
+  // saludo venga al inicio aunque el mensaje sea más largo ("Hola Daniela,
+  // buenos días, ¿cómo estás?"), o que sea solo el saludo (<=3 palabras).
+  // PERO: si el mensaje además expresa una necesidad ("hola Daniela,
+  // quiero que me ayudes en esto"), la necesidad manda y NO es solo
+  // saludo, para no tragarse la pregunta.
+  // Nota: norm ya viene sin acentos ni mayúsculas, por eso las frases van
+  // sin acento.
+  const GREETING_PHRASES = ['hola', 'buenas', 'buenos dias', 'buenas tardes', 'buenas noches', 'buen dia', 'que onda', 'que haces', 'que tal', 'como estas', 'como estan', 'disculpa', 'que hay', 'hola que tal'];
+  if (GREETING_PHRASES.some((g) => norm.startsWith(g)) && !detectNeed(text)) return { kind: 'greeting' };
   if (contains(text, ['hola', 'buenas', 'buenos dias', 'buenas tardes', 'buenas noches']) && norm.split(' ').length <= 3) return { kind: 'greeting' };
   return null;
 }
@@ -1749,9 +1764,14 @@ async function handleMessage(msg) {
       await wa.sendText(from, greet);
       return;
     }
+    // Primer saludo, cualquier forma (v3.6, orden de Peter 2026-11-13):
+    // Daniela responde el saludo y enseguida pide nombre y correo para
+    // dar trato especial y mandar más información. Vale para "hola",
+    // "qué onda", "qué haces", "qué tal", "cómo estás", "disculpa",
+    // "buenas tardes/días/noches", "buen día", "qué hay".
     await wa.sendText(
       from,
-      'Hola, soy Daniela, la asistente de Blü Bee Technologies. Para atenderle como se merece, ¿me dice su nombre y de qué empresa nos escribe?'
+      'Hola, mucho gusto. Soy Daniela, la asistente de Blü Bee Technologies. ¿Con quién tengo el gusto? ¿Me podrías dar tu nombre para darte un trato especial? ¿Me compartes tu correo para mandarte más información?'
     );
     st.stage = 'awaiting_name_company';
     saveState(st);
@@ -2069,8 +2089,26 @@ async function handleMainIntent(msg, st, text, norm) {
     // le mandó una nota de voz ("Hola Daniela, buenos días, ¿cómo estás?")
     // y Daniela no le contestó, solo le mandó a él mismo el aviso de
     // "no es de Blü Bee" con el nombre mal extraído ("Cómo Estás").
+    // (v3.6, orden de Peter 2026-11-13): si tras el saludo hay una
+    // pregunta real, Daniela NO responde solo con un saludo: si es
+    // pregunta de actividad (mensajes/llamadas/clientes de hoy) la
+    // contesta con el reporte; si no la sabe, le dice "Dame un segundo,
+    // lo reviso y te respondo en un momento", guarda la pregunta para
+    // Tomás y Tomás la investiga y le da la respuesta.
     if (sameNumber(from, config.peterWhatsApp)) {
-      await wa.sendText(from, 'Hola Pedro, buenos días. Muy bien, gracias. ¿En qué le puedo ayudar?');
+      const rest = stripGreetingPrefix(norm);
+      if (!rest) {
+        await wa.sendText(from, 'Hola Pedro, buenos días. Muy bien, gracias. ¿En qué le puedo ayudar?');
+        saveState(st);
+        return;
+      }
+      if (looksLikeActivityQuestion(norm)) {
+        await wa.sendText(from, activityReportToday());
+        saveState(st);
+        return;
+      }
+      savePendingQuestion(from, text, 'pedro');
+      await wa.sendText(from, 'Dame un segundo, lo reviso y te respondo en un momento.');
       saveState(st);
       return;
     }
@@ -2080,7 +2118,29 @@ async function handleMainIntent(msg, st, text, norm) {
     // nunca se le deja sin respuesta ni se le pasa a Peter en su lugar.
     // Tampoco se registra como pregunta sin respuesta (no es una pregunta
     // de negocio que el equipo deba aprender a contestar).
+    // (v3.6, orden de Peter 2026-11-13): PERO si Ricky pregunta algo
+    // concreto que Daniela no tiene cargado, ella le dice "dame un
+    // segundo, te lo investigo y te doy una respuesta lo antes posible",
+    // le pasa la pregunta a Tomás, Tomás la investiga y se la da a
+    // Daniela, y Daniela se la contesta a Ricky por texto.
     if (isVipRicky(from)) {
+      const rest = stripGreetingPrefix(norm);
+      // Pregunta concreta que Daniela no tiene cargada: con "?" explícito,
+      // o que empieza con palabra interrogativa (cuándo, dónde, cómo,
+      // cuánto, por qué, qué hora/día/fecha), o que pide algo ("dime",
+      // "me puedes", "sabes"). Un comentario casual ("qué calor hace")
+      // NO es pregunta: "qué" solo no basta.
+      const isQuestion = rest && (
+        /\?/.test(text) ||
+        /^(cuando|donde|como|cuanto|cuantos|por que|que hora|que dia|que fecha|a que hora)\b/.test(rest) ||
+        /\b(dime|me puedes|me podrias|sabes|podrias decirme)\b/.test(rest)
+      );
+      if (isQuestion) {
+        savePendingQuestion(from, text, 'ricky');
+        await wa.sendText(from, 'Dame un segundo, te lo investigo y te doy una respuesta lo antes posible.');
+        saveState(st);
+        return;
+      }
       await wa.sendText(from, vipCasualReply(st, text));
       saveState(st);
       return;
@@ -2260,6 +2320,29 @@ async function handleMainIntent(msg, st, text, norm) {
         saveState(st);
         return;
       }
+      // Dueño — Peter (v3.6, orden de Peter 2026-11-13): si tras el
+      // saludo hay una pregunta real ("hola Daniela, oye, hemos tenido
+      // mensajes hoy?"), Daniela NO responde solo con un saludo: contesta
+      // la pregunta. Si es de actividad, con el reporte; si no la sabe,
+      // "Dame un segundo, lo reviso y te respondo en un momento" y la
+      // guarda para Tomás.
+      if (sameNumber(from, config.peterWhatsApp)) {
+        const rest = stripGreetingPrefix(norm);
+        if (rest) {
+          if (looksLikeActivityQuestion(norm)) {
+            await wa.sendText(from, activityReportToday());
+            saveState(st);
+            return;
+          }
+          savePendingQuestion(from, text, 'pedro');
+          await wa.sendText(from, 'Dame un segundo, lo reviso y te respondo en un momento.');
+          saveState(st);
+          return;
+        }
+        await wa.sendText(from, 'Hola Pedro, buenos días. Muy bien, gracias. ¿En qué le puedo ayudar?');
+        saveState(st);
+        return;
+      }
       // Saludo por nombre si ya lo conoce (por perfil o por conversación).
       // Nunca el nombre del bot: si el perfil es "Daniela"/"Dani" no se usa.
       let greetName = display;
@@ -2267,12 +2350,136 @@ async function handleMainIntent(msg, st, text, norm) {
         const prof = capitalizeName(msg.profileName);
         if (!isBotName(prof)) greetName = prof;
       }
-      await wa.sendText(from, greetName
-        ? `Hola, ${greetName}, soy Daniela, la asistente de Blü Bee Technologies. ¿En qué ${leTe} puedo ayudar?`
-        : `Hola, soy Daniela, la asistente de Blü Bee Technologies. ¿En qué ${leTe} puedo ayudar?`);
+      // Contacto sin nombre todavía (v3.6, orden de Peter 2026-11-13):
+      // Daniela responde el saludo y enseguida pide nombre y correo para
+      // dar trato especial y mandar más información.
+      if (!greetName) {
+        await wa.sendText(from, 'Hola, mucho gusto. Soy Daniela, la asistente de Blü Bee Technologies. ¿Con quién tengo el gusto? ¿Me podrías dar tu nombre para darte un trato especial? ¿Me compartes tu correo para mandarte más información?');
+        st.stage = 'awaiting_name_company';
+        saveState(st);
+        return;
+      }
+      await wa.sendText(from, `Hola, ${greetName}, soy Daniela, la asistente de Blü Bee Technologies. ¿En qué ${leTe} puedo ayudar?`);
       return;
     }
   }
+}
+
+// ---------- preguntas pendientes para Tomás (v3.6, orden de Peter 2026-11-13) ----------
+// Cuando Peter (o Ricky) le pregunta a Daniela algo que ella no sabe
+// contestar, Daniela le dice "Dame un segundo, lo reviso y te respondo en
+// un momento", guarda la pregunta aquí y Tomás la investiga y le da la
+// respuesta a Daniela para que se la conteste por texto. El archivo se lee
+// con GET /preguntas-pendientes (solo Peter) y se limpia con
+// POST /preguntas-pendientes/resolver.
+const PENDING_FILE = path.join(config.stateDir, 'preguntas-pendientes.json');
+
+function savePendingQuestion(from, text, who) {
+  let list = [];
+  try {
+    list = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8'));
+    if (!Array.isArray(list)) list = [];
+  } catch { /* archivo nuevo */ }
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    from,
+    who: who || 'peter',
+    pregunta: text,
+    fecha: new Date().toISOString(),
+    resuelta: false,
+  };
+  list.push(entry);
+  fs.mkdirSync(config.stateDir, { recursive: true });
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(list, null, 2));
+  return entry;
+}
+
+function readPendingQuestions() {
+  try {
+    const list = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+function resolvePendingQuestion(id) {
+  const list = readPendingQuestions();
+  const entry = list.find((e) => e.id === id);
+  if (!entry) return false;
+  entry.resuelta = true;
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(list, null, 2));
+  return true;
+}
+
+// Quita el saludo del inicio de un texto normalizado ("hola daniela oye
+// hemos tenido mensajes hoy" -> "hemos tenido mensajes hoy"). Sirve para
+// ver si tras el saludo hay una pregunta real o solo era un saludo.
+function stripGreetingPrefix(norm) {
+  let rest = norm || '';
+  const PREFIXES = [
+    'hola daniela', 'hola dani', 'hola', 'buenos dias', 'buenas tardes',
+    'buenas noches', 'buen dia', 'buenas', 'que onda', 'que haces',
+    'que tal', 'como estas', 'como estan', 'disculpa', 'que hay',
+    'hola que tal', 'oye', 'oye daniela',
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const p of PREFIXES) {
+      if (rest === p) return '';
+      if (rest.startsWith(`${p} `)) {
+        rest = rest.slice(p.length + 1).trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+  // "daniela" sola al inicio ("daniela, hemos tenido...") también es saludo.
+  if (rest === 'daniela' || rest === 'dani') return '';
+  if (rest.startsWith('daniela ')) rest = rest.slice('daniela '.length).trim();
+  if (rest.startsWith('dani ')) rest = rest.slice('dani '.length).trim();
+  return rest;
+}
+
+// ¿Peter pregunta por la actividad de hoy (mensajes, llamadas, clientes)?
+// Daniela revisa leads.json y los estados de hoy y le reporta.
+function looksLikeActivityQuestion(norm) {
+  if (!norm) return false;
+  const hasToday = /\b(hoy|el dia de hoy|esta manana|esta tarde|ayer)\b/.test(norm);
+  const hasActivity = /\b(mensaje|mensajes|llamada|llamadas|cliente|clientes|contacto|contactos|lead|leads|alguien|nuevo|nueva|hubo|ha habido|han llegado|llegaron|escribio|escribieron|llamo|llamaron)\b/.test(norm);
+  return hasToday && hasActivity;
+}
+
+function activityReportToday() {
+  const today = new Date().toISOString().slice(0, 10);
+  let leads = [];
+  try {
+    leads = JSON.parse(fs.readFileSync(LEADS_FILE, 'utf8'));
+    if (!Array.isArray(leads)) leads = [];
+  } catch { /* sin leads */ }
+  const todayLeads = leads.filter((l) => (l.fecha || '').slice(0, 10) === today);
+  // Contactos nuevos de hoy (estados creados hoy, sin contar a Peter ni a Ricky).
+  let newToday = [];
+  try {
+    for (const f of fs.readdirSync(STATE_DIR)) {
+      if (!f.endsWith('.json')) continue;
+      const phone = f.slice(0, -5);
+      if (phone === config.peterWhatsApp || phone === '524421447169') continue;
+      if (sameNumber(phone, config.peterWhatsApp)) continue;
+      if (config.vipRicky && sameNumber(phone, config.vipRicky.phone)) continue;
+      const st = JSON.parse(fs.readFileSync(path.join(STATE_DIR, f), 'utf8'));
+      const created = (st.createdAt || st.fecha || '').slice(0, 10);
+      if (created === today) newToday.push(st);
+    }
+  } catch { /* sin estados */ }
+  const names = todayLeads.map((l) => l.nombre || l.name).filter(Boolean);
+  const allNames = [...new Set([...names, ...newToday.map((s) => s.name).filter(Boolean)])];
+  if (allNames.length === 0 && todayLeads.length === 0 && newToday.length === 0) {
+    return 'Hasta ahora no, Pedro. Hoy no hemos tenido mensajes de clientes nuevos ni llamadas registradas. Si llega alguien, te aviso de inmediato.';
+  }
+  const parts = [];
+  if (todayLeads.length > 0) parts.push(`${todayLeads.length} contacto${todayLeads.length > 1 ? 's' : ''} nuevo${todayLeads.length > 1 ? 's' : ''}`);
+  if (allNames.length > 0) parts.push(`de ${allNames.join(', ')}`);
+  return `Sí, Pedro. Hoy hemos tenido ${parts.join(' ')}. ¿Quieres que te pase los detalles?`;
 }
 
 module.exports = {
@@ -2330,4 +2537,12 @@ module.exports = {
   transcribeWithGroq,
   transcribeWithOpenAI,
   transcribeAudio,
+  // Preguntas pendientes para Tomás (v3.6, orden de Peter 2026-11-13):
+  // "dame un segundo, te lo investigo" para Peter y para Ricky.
+  savePendingQuestion,
+  readPendingQuestions,
+  resolvePendingQuestion,
+  stripGreetingPrefix,
+  looksLikeActivityQuestion,
+  activityReportToday,
 };
