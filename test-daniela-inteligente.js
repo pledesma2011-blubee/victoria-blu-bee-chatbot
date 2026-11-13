@@ -1152,7 +1152,9 @@ function cleanupVideos() {
     await incoming(STALE, 'Hola');
     m = since(mark, STALE);
     console.log('    (nombre guardado "Daniela", dice "Hola"):');
-    check('saludo limpio: "Hola, soy Daniela, la asistente..."', hasText(m, /Hola, soy Daniela, la asistente de Blü Bee Technologies\. ¿En qué le puedo ayudar\?/));
+    // v3.6 (orden de Peter 2026-11-13): sin nombre válido, Daniela saluda
+    // y pide nombre + correo para dar trato especial.
+    check('saludo limpio: pide nombre y correo', hasText(m, /Hola, mucho gusto\. Soy Daniela, la asistente de Blü Bee Technologies\. ¿Con quién tengo el gusto\? ¿Me podrías dar tu nombre para darte un trato especial\? ¿Me compartes tu correo para mandarte más información\?/));
     check('NO duplica el nombre ("Hola, Daniela, soy Daniela")', !hasText(m, /Hola, Daniela, soy Daniela/));
     check('NO dice "Mucho gusto, Daniela"', !hasText(m, /Mucho gusto, Daniela/));
 
@@ -1188,8 +1190,36 @@ function cleanupVideos() {
     await daniela.handleMessage({ from: PROF, type: 'text', text: { body: 'Hola' }, profileName: 'Daniela' });
     m = since(mark, PROF);
     console.log('    (perfil de WhatsApp "Daniela", dice "Hola"):');
-    check('saludo limpio (sin duplicar)', hasText(m, /Hola, soy Daniela, la asistente de Blü Bee Technologies\. ¿En qué le puedo ayudar\?/));
+    // v3.6 (orden de Peter 2026-11-13): sin nombre válido, Daniela saluda
+    // y pide nombre + correo para dar trato especial.
+    check('saludo limpio (sin duplicar)', hasText(m, /Hola, mucho gusto\. Soy Daniela, la asistente de Blü Bee Technologies\. ¿Con quién tengo el gusto\? ¿Me podrías dar tu nombre para darte un trato especial\? ¿Me compartes tu correo para mandarte más información\?/));
     check('NO duplica el nombre', !hasText(m, /Hola, Daniela, soy Daniela/));
+
+    // (m-e) Caso real 2026-11-12: estado viejo con "Daniela soy" (de "hola
+    // Daniela soy Ana" del 2026-11-10). El arreglo anterior solo bloqueaba
+    // la palabra exacta "Daniela"; "Daniela soy" se colaba y el saludo
+    // salía "Hola, Daniela soy, soy Daniela...". La comparación ahora es
+    // por palabra y loadState autolimpia el estado guardado.
+    console.log('\n(m-e) Nombre guardado "Daniela soy" (caso Ana):');
+    check('isBotName("Daniela soy") = true (por palabra)', daniela.isBotName('Daniela soy') === true);
+    check('isBotName("Daniel") = false (nombre real distinto)', daniela.isBotName('Daniel') === false);
+    check('contactDisplayName ignora preferredName="Daniela soy"', daniela.contactDisplayName({ preferredName: 'Daniela soy', name: 'Daniela' }) === '');
+    const STALE3 = '521111000020';
+    await driveToMain(STALE3, 'Soy Ana de la empresa La Esquina');
+    const staleFile3 = path.join(tmpDir, `${STALE3}.json`);
+    const staleSt3 = JSON.parse(fs.readFileSync(staleFile3, 'utf8'));
+    staleSt3.name = 'Daniela soy';
+    staleSt3.preferredName = 'Daniela soy';
+    fs.writeFileSync(staleFile3, JSON.stringify(staleSt3, null, 2));
+    mark = sent.length;
+    await incoming(STALE3, 'Hola');
+    m = since(mark, STALE3);
+    console.log('    (nombre guardado "Daniela soy", dice "Hola"):');
+    // v3.6 (orden de Peter 2026-11-13): sin nombre válido, Daniela saluda
+    // y pide nombre + correo para dar trato especial.
+    check('saludo limpio: pide nombre y correo', hasText(m, /Hola, mucho gusto\. Soy Daniela, la asistente de Blü Bee Technologies\. ¿Con quién tengo el gusto\? ¿Me podrías dar tu nombre para darte un trato especial\? ¿Me compartes tu correo para mandarte más información\?/));
+    check('NO dice "Hola, Daniela soy, soy Daniela"', !hasText(m, /Hola, Daniela soy, soy Daniela/));
+    check('estado autolimpiado: name ya no es "Daniela soy"', JSON.parse(fs.readFileSync(staleFile3, 'utf8')).name !== 'Daniela soy');
 
     // ---------- (n) Foto de perfil de WhatsApp del número de Blü Bee
     // Flujo de Meta (Resumable Upload API + WhatsApp Business Profile):
