@@ -2469,6 +2469,13 @@ async function handleMainIntent(msg, st, text, norm) {
         saveState(st);
         return;
       }
+      // v4.4: charla casual sobre Daniela ("¿qué haces?", "te pregunté
+      // qué haces") — NO es pregunta de negocio, no se investiga.
+      if (isSmallTalkAboutDaniela(norm)) {
+        await wa.sendText(from, 'Estoy trabajando para atenderte, Pedro. ¿En qué te puedo ayudar?');
+        saveState(st);
+        return;
+      }
       savePendingQuestion(from, text, 'pedro');
       await wa.sendText(from, 'Dame un segundo, lo reviso y te respondo en un momento.');
       saveState(st);
@@ -2487,6 +2494,12 @@ async function handleMainIntent(msg, st, text, norm) {
     // Daniela, y Daniela se la contesta a Ricky por texto.
     if (isVipRicky(from)) {
       const rest = stripGreetingPrefix(norm);
+      // v4.4: "¿qué haces?" es charla, no pregunta para investigar.
+      if (isSmallTalkAboutDaniela(norm)) {
+        await wa.sendText(from, vipCasualReply(st, text));
+        saveState(st);
+        return;
+      }
       // Pregunta concreta que Daniela no tiene cargada: con "?" explícito,
       // o que empieza con palabra interrogativa (cuándo, dónde, cómo,
       // cuánto, por qué, qué hora/día/fecha), o que pide algo ("dime",
@@ -2740,6 +2753,12 @@ async function handleMainIntent(msg, st, text, norm) {
       if (sameNumber(from, config.peterWhatsApp)) {
         const rest = stripGreetingPrefix(norm);
         if (rest) {
+          // v4.4: "hola Daniela, ¿qué haces?" es charla, no pregunta.
+          if (isSmallTalkAboutDaniela(norm)) {
+            await wa.sendText(from, 'Estoy trabajando para atenderte, Pedro. ¿En qué te puedo ayudar?');
+            saveState(st);
+            return;
+          }
           // v4.2: saludo + pregunta fuera de tema ("hola Daniela, ¿sabes de
           // fútbol?") → redirección profesional, no "dame un segundo".
           if (isOffTopicQuestion(norm)) {
@@ -2866,6 +2885,24 @@ function stripGreetingPrefix(norm) {
   return rest;
 }
 
+// Charla casual sobre Daniela misma ("¿qué haces?", "te pregunté qué
+// haces", "¿qué estás haciendo?") — NO es una pregunta de negocio y NO
+// se investiga con "dame un segundo" (v4.4, caso real 2026-11-13:
+// Peter preguntó "¿qué haces?" en nota de voz y Daniela contestó "dame
+// un segundo" dos veces; la transcripción "Te pregunté que qué haces"
+// no tenía saludo y cayó en el flujo de investigar).
+function isSmallTalkAboutDaniela(norm) {
+  let s = (norm || '').trim();
+  // Quita saludo inicial y marco de pregunta, sin comerse el "qué haces".
+  s = s.replace(/^(hola( daniela| dani)?|buenos dias|buenas tardes|buenas noches|buen dia|buenas|que onda|que tal|como estas|como estan|disculpa|oye( daniela)?)\b\s*/, '').trim();
+  s = s.replace(/^(te pregunte|te preguntaba|te pregunto|te hice una pregunta|te queria preguntar|te quiero preguntar|dime)\b\s*/, '').trim();
+  // "te pregunté QUE qué haces" deja "que que haces" -> "que haces".
+  s = s.replace(/^que que\s+/, 'que ');
+  // "qué haces, Daniela" -> "qué haces".
+  s = s.replace(/,?\s*(daniela|dani)\s*$/, '').trim();
+  return /^(que haces( hoy| ahorita| ahora| tu)?|que estas haciendo( hoy| ahorita| ahora)?|que andas haciendo( hoy| ahorita| ahora)?)$/.test(s);
+}
+
 // ¿Peter pregunta por la actividad de hoy (mensajes, llamadas, clientes)?
 // Daniela revisa leads.json y los estados de hoy y le reporta.
 function looksLikeActivityQuestion(norm) {
@@ -2969,6 +3006,7 @@ module.exports = {
   readPendingQuestions,
   resolvePendingQuestion,
   stripGreetingPrefix,
+  isSmallTalkAboutDaniela,
   looksLikeActivityQuestion,
   activityReportToday,
   // Cerebro de IA (v4.0, orden de Peter 2026-11-13): Groq gratis,
