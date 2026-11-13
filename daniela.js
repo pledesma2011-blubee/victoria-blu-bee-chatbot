@@ -2563,8 +2563,16 @@ function stripGreetingPrefix(norm) {
   const PREFIXES = [
     'hola daniela', 'hola dani', 'hola', 'buenos dias', 'buenas tardes',
     'buenas noches', 'buen dia', 'buenas', 'que onda', 'que haces',
-    'que tal', 'como estas', 'como estan', 'disculpa', 'que hay',
+    'que tal', 'como estas', 'como estan', 'disculpa', 'que hay de nuevo', 'que hay',
     'hola que tal', 'oye', 'oye daniela',
+    // Continuaciones de saludo (v4.1, caso real 2026-11-13: Peter saludó
+    // "hola Daniela, ¿cómo estás? ¿qué onda? ¿qué haces?" y la
+    // transcripción dejó "todo bien" al final; eso NO es una pregunta,
+    // es parte del saludo y Daniela debe saludar de vuelta, no decir
+    // "dame un segundo, te lo investigo").
+    'todo bien', 'todo tranquilo', 'como te va', 'como andas',
+    'como va todo', 'que cuentas', 'que me cuentas', 'que tal todo',
+    'que tal va', 'que pasa', 'que hubo', 'que tal andas',
   ];
   let changed = true;
   while (changed) {
