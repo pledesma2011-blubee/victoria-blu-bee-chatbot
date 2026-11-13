@@ -910,6 +910,17 @@ async function checkLimits(st, text) {
   // VIP Ricky: NO aplica (misma razón que la prueba de identidad: Peter
   // ordenó que Daniela siempre le conteste a Ricky).
   if (!isVipRicky(from) && looksGeneralTask(text)) {
+    // v4.6: el cerebro intenta primero (orden de Peter 2026-11-13:
+    // profesionalizar — el cerebro contesta charla y preguntas generales,
+    // como "¿qué opinas de la inteligencia artificial?"). Si el cerebro
+    // contesta algo útil, se manda; si no sabe o no contesta, se aplica
+    // el límite de siempre (redirección una vez, silencio si insiste).
+    const brain = await brainReply(st, text);
+    if (brain && !/^dame un segundo/i.test(brain)) {
+      await wa.sendText(from, brain);
+      saveState(st);
+      return true;
+    }
     st.offtopicCount = (st.offtopicCount || 0) + 1;
     saveState(st);
     const repeated = st.offtopicCount >= 2;
@@ -1315,6 +1326,11 @@ async function transcribeWithProvider(endpoint, model, key, filePath) {
     form.append('file', new Blob([buffer], { type: 'audio/ogg' }), 'audio.ogg');
     form.append('model', model);
     form.append('language', 'es');
+    // (v4.6) Prompt inicial: guía a Whisper hacia el contexto de la
+    // conversación (español mexicano, Daniela, Blü Bee) y reduce
+    // alucinaciones en notas cortas o con ruido de fondo (caso real
+    // 2026-11-13: la tele se coló en la transcripción).
+    form.append('prompt', 'Daniela, la asistente virtual de Blü Bee Technologies, atiende por WhatsApp a los clientes de la empresa. Conversación en español mexicano.');
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}` },
@@ -2937,16 +2953,34 @@ function stripGreetingPrefix(norm) {
 // Peter preguntó "¿qué haces?" en nota de voz y Daniela contestó "dame
 // un segundo" dos veces; la transcripción "Te pregunté que qué haces"
 // no tenía saludo y cayó en el flujo de investigar).
+// Charla casual sobre Daniela ("¿qué haces?", "te pregunté qué haces").
+// NO es pregunta de negocio, no se investiga. Aplica a Peter y a Ricky;
+// "¿qué haces para los hoteles?" sigue siendo pregunta de negocio.
+// (v4.6, caso real 2026-11-13 12:03): la transcripción de una nota de voz
+// puede venir mezclada con audio de fondo (la tele): "Se presume eran
+// agentes... ¿Qué haces, Daniela? ...asesinados a mano." La pregunta real
+// queda dentro de texto basura, así que la frase se busca en cualquier
+// parte del mensaje, no solo como mensaje completo. Si tras la frase hay
+// contexto de negocio ("para los hoteles", "en la empresa"), NO es charla.
 function isSmallTalkAboutDaniela(norm) {
-  let s = (norm || '').trim();
+  const s = (norm || '').trim();
+  // 1) Mensaje completo (caso normal).
+  let t = s;
   // Quita saludo inicial y marco de pregunta, sin comerse el "qué haces".
-  s = s.replace(/^(hola( daniela| dani)?|buenos dias|buenas tardes|buenas noches|buen dia|buenas|que onda|que tal|como estas|como estan|disculpa|oye( daniela)?)\b\s*/, '').trim();
-  s = s.replace(/^(te pregunte|te preguntaba|te pregunto|te hice una pregunta|te queria preguntar|te quiero preguntar|dime)\b\s*/, '').trim();
+  t = t.replace(/^(hola( daniela| dani)?|buenos dias|buenas tardes|buenas noches|buen dia|buenas|que onda|que tal|como estas|como estan|disculpa|oye( daniela)?)\b\s*/, '').trim();
+  t = t.replace(/^(te pregunte|te preguntaba|te pregunto|te hice una pregunta|te queria preguntar|te quiero preguntar|dime)\b\s*/, '').trim();
   // "te pregunté QUE qué haces" deja "que que haces" -> "que haces".
-  s = s.replace(/^que que\s+/, 'que ');
+  t = t.replace(/^que que\s+/, 'que ');
   // "qué haces, Daniela" -> "qué haces".
-  s = s.replace(/,?\s*(daniela|dani)\s*$/, '').trim();
-  return /^(que haces( hoy| ahorita| ahora| tu)?|que estas haciendo( hoy| ahorita| ahora)?|que andas haciendo( hoy| ahorita| ahora)?)$/.test(s);
+  t = t.replace(/,?\s*(daniela|dani)\s*$/, '').trim();
+  if (/^(que haces( hoy| ahorita| ahora| tu)?|que estas haciendo( hoy| ahorita| ahora)?|que andas haciendo( hoy| ahorita| ahora)?)$/.test(t)) return true;
+  // 2) La frase dentro de un mensaje más largo (transcripción contaminada).
+  const m = s.match(/(que haces|que estas haciendo|que andas haciendo)(,? (daniela|dani))?\b/);
+  if (!m) return false;
+  const after = s.slice(m.index + m[0].length);
+  if (/^\s*(para|por|con)\b/.test(after)) return false;
+  if (/\b(en la empresa|en tu empresa|en tu trabajo|en blu bee)\b/.test(after.slice(0, 40))) return false;
+  return true;
 }
 
 // ¿Peter pregunta por la actividad de hoy (mensajes, llamadas, clientes)?
