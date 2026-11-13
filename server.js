@@ -280,6 +280,61 @@ app.post('/set-profile-photo', async (req, res) => {
   }
 });
 
+// Preguntas pendientes para Tomás (v3.6, orden de Peter 2026-11-13).
+// Daniela guarda aquí las preguntas de Peter y de Ricky que no supo
+// contestar ("Dame un segundo, lo reviso y te respondo en un momento").
+// Tomás las revisa, las investiga y les da la respuesta a Daniela para
+// que se las conteste por texto. Sin autenticación externa: solo se
+// exponen las preguntas (sin datos de otros contactos) y el marcado de
+// resueltas; el envío de la respuesta usa /deliver-answer.
+app.get('/preguntas-pendientes', (req, res) => {
+  try {
+    const all = daniela.readPendingQuestions();
+    const pending = all.filter((e) => !e.resuelta);
+    return res.json({ ok: true, pendientes: pending, total: pending.length });
+  } catch (e) {
+    console.error('Error en /preguntas-pendientes:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/preguntas-pendientes/resolver', async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '');
+    if (!id) return res.json({ ok: false, reason: 'no-id' });
+    const done = daniela.resolvePendingQuestion(id);
+    return res.json({ ok: done });
+  } catch (e) {
+    console.error('Error en /preguntas-pendientes/resolver:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Manda la respuesta investigada por Tomás a Peter o a Ricky por texto.
+//   POST /deliver-answer  { "phone": "524421447169" | "5215519518504", "text": "...", "preguntaId": "..." }
+// Solo acepta el número de Peter o el de Ricky (VIP). Si trae preguntaId,
+// marca esa pregunta como resuelta.
+app.post('/deliver-answer', async (req, res) => {
+  try {
+    const phone = String((req.body && req.body.phone) || '');
+    const text = String((req.body && req.body.text) || '');
+    const preguntaId = String((req.body && req.body.preguntaId) || '');
+    const peter = config.peterWhatsApp || '524421447169';
+    const ricky = (config.vipRicky && config.vipRicky.phone) || '5215519518504';
+    const isPeter = phone === peter;
+    const isRicky = phone === ricky;
+    if (!isPeter && !isRicky) return res.json({ ok: false, reason: 'not-allowed' });
+    if (!text) return res.json({ ok: false, reason: 'no-text' });
+    const sent = await wa.sendText(phone, text);
+    const messageId = sent && sent.messages && sent.messages[0] && sent.messages[0].id;
+    if (preguntaId) daniela.resolvePendingQuestion(preguntaId);
+    return res.json({ ok: true, messageId: messageId || null });
+  } catch (e) {
+    console.error('Error en /deliver-answer:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Salud del servidor
 app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: 'Blü Bee Technologies' }));
 
