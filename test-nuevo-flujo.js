@@ -360,7 +360,7 @@ async function incoming(phone, text) {
   m = since(mark, PETER_OWNER);
   st = readState(PETER_OWNER);
   console.log('\n(k-a) Peter: "Hola Daniela, buenos días, ¿cómo estás?":');
-  check('responde el saludo', hasText(m, /Hola Pedro, buenos días\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('responde el saludo', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
   check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /cómo estás/.test(q.pregunta)));
   check('nombre fijado a Pedro', st && st.name === 'Pedro', `name=${st && st.name}`);
 
@@ -422,9 +422,40 @@ async function incoming(phone, text) {
   await incoming(PETER_OWNER, 'hola Daniela, ¿cómo estás? ¿qué onda? ¿qué haces? ¿todo bien?');
   m = since(mark, PETER_OWNER);
   console.log('\n(k-g) Peter: saludo con "¿todo bien?" al final:');
-  check('responde el saludo', hasText(m, /Hola Pedro, buenos días\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('responde el saludo', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
   check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
   check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /todo bien/.test(q.pregunta)));
+
+  // (k-h) Charla casual sobre Daniela (v4.4, caso real 2026-11-13):
+  // Peter preguntó "¿qué haces?" en nota de voz y Daniela contestó
+  // "dame un segundo" dos veces. La transcripción "Te pregunté que qué
+  // haces" NO es pregunta de negocio: Daniela contesta con calidez y
+  // NO guarda pregunta pendiente.
+  console.log('\n(k-h) isSmallTalkAboutDaniela:');
+  check('"te pregunte que que haces" -> true', daniela.isSmallTalkAboutDaniela('te pregunte que que haces') === true);
+  check('"que haces" -> true', daniela.isSmallTalkAboutDaniela('que haces') === true);
+  check('"hola daniela que haces" -> true', daniela.isSmallTalkAboutDaniela('hola daniela que haces') === true);
+  check('"que haces hoy" -> true', daniela.isSmallTalkAboutDaniela('que haces hoy') === true);
+  check('"que estas haciendo" -> true', daniela.isSmallTalkAboutDaniela('que estas haciendo') === true);
+  check('"que haces para los hoteles" -> false', daniela.isSmallTalkAboutDaniela('que haces para los hoteles') === false);
+  check('"cual es el precio" -> false', daniela.isSmallTalkAboutDaniela('cual es el precio') === false);
+
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Te pregunté que qué haces.');
+  m = since(mark, PETER_OWNER);
+  console.log('\n(k-h2) Peter: "Te pregunté que qué haces.":');
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('contesta con calidez', hasText(m, /Estoy trabajando, Pedro\. Soy una inteligencia artificial y no descanso/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /que haces/.test(q.pregunta)));
+
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Hola Daniela, ¿qué haces?');
+  m = since(mark, PETER_OWNER);
+  console.log('\n(k-h3) Peter: "Hola Daniela, ¿qué haces?":');
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  // stripGreetingPrefix lo deja en saludo puro, así que saluda de vuelta.
+  check('saluda de vuelta', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /que haces/.test(q.pregunta)));
 
   // ---------- (l) Cerebro de IA (v4.0, orden de Peter 2026-11-13):
   // cuando no hay intención ni respuesta en la base, Daniela le pregunta
@@ -527,8 +558,83 @@ async function incoming(phone, text) {
   check('prohíbe inventar precios', /NUNCA inventes precios/.test(sysPrompt));
   check('prohíbe inventar clientes', /NO tiene clientes formales|son prospectos, NO clientes/.test(sysPrompt));
   check('incluye el nombre del contacto', /Ana/.test(sysPrompt));
+  // (l-h) Modelo del cerebro (v4.8): Groq retiró llama-3.3-70b-versatile
+  // el 16 ago 2026 y el cerebro daba 404 en vivo sin que nadie lo notara.
+  // El modelo debe ser el reemplazo recomendado por Groq, no un llama-3.x.
+  console.log('  (l-h) Modelo del cerebro:');
+  check('modelo no es llama-3.x (familia retirada por Groq)', !/^llama-3\./.test(daniela.GROQ_CHAT_MODEL));
+  check('modelo es openai/gpt-oss-120b (reemplazo recomendado por Groq)', daniela.GROQ_CHAT_MODEL === 'openai/gpt-oss-120b');
   restoreBrain();
   config.groqApiKey = realGroqKey;
+  // 2026-11-13): profesionalizar — el cerebro ya NO se salta para Peter
+  // ni Ricky. Charla y preguntas generales las contesta el cerebro; solo
+  // los datos concretos que no sabe van a "dame un segundo" + pendiente.
+  // Caso real: Peter preguntó "¿qué haces?" y Daniela dijo "dame un
+  // segundo" porque la ruta del dueño nunca llegaba al cerebro.
+  console.log('\n(m) Cerebro para Peter y Ricky (v4.5):');
+  // (m-a) El sistema del cerebro ya distingue las tres preguntas.
+  const sysPeter = daniela.brainSystemPrompt({ phone: PETER_OWNER, formality: 'tu', name: 'Pedro', preferredName: 'Pedro' });
+  check('regla de identidad: 24 horas, 365 días', /24 horas.*365 días/.test(sysPeter));
+  check('distingue las tres preguntas', /¿qué haces\?.*¿qué hace la empresa\?.*¿qué haces tú en la empresa\?/s.test(sysPeter));
+  check('a Pedro sí se le puede llamar Pedro', /SALVO que la persona con la que hablas sea Pedro/.test(sysPeter));
+  check('dato concreto que no sabe -> "dame un segundo"', /RFC, dirección, número de empleados/.test(sysPeter));
+  // (m-b) brainAnswerSafe: "Pedro" permitido para Pedro, bloqueado para extraños.
+  const stPeter = { phone: PETER_OWNER, formality: 'tu', name: 'Pedro', preferredName: 'Pedro' };
+  const stStranger = { phone: BRAIN, formality: 'usted', name: null, preferredName: null };
+  check('"Pedro" permitido para Pedro', daniela.brainAnswerSafe('Hola Pedro, estoy trabajando.', stPeter) === 'Hola Pedro, estoy trabajando.');
+  check('"Pedro" bloqueado para un extraño', daniela.brainAnswerSafe('Pedro te atiende.', stStranger) === null);
+  // (m-c) Peter, charla sin base ("¿qué opinas de la inteligencia
+  // artificial?"): el cerebro contesta, NO "dame un segundo", NO pendiente.
+  config.groqApiKey = 'test-fake-key';
+  mockBrain('La inteligencia artificial es un programa que aprende de datos y ayuda a automatizar tareas. En Blü Bee la usamos para que Daniela atienda por WhatsApp.');
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿qué opinas de la inteligencia artificial?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (m-c) Peter: charla vía cerebro:');
+  check('manda la respuesta del cerebro', hasText(m, /La inteligencia artificial es un programa que aprende/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /inteligencia/.test(q.pregunta)));
+  // (m-d) Peter, dato concreto ("¿cuál es el RFC de la empresa?"): el
+  // cerebro dice "dame un segundo" → se guarda pendiente y se manda ese texto.
+  mockBrain('Dame un segundo, te lo investigo y te doy una respuesta lo antes posible.');
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿cuál es el RFC de la empresa?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (m-d) Peter: dato concreto vía cerebro:');
+  check('dice "dame un segundo"', hasText(m, /Dame un segundo/));
+  check('guarda pregunta pendiente', daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /RFC/.test(q.pregunta)));
+  // (m-e) Ricky, charla ("¿qué opinas de la inteligencia artificial?"):
+  // el cerebro contesta, NO "dame un segundo", NO pendiente.
+  mockBrain('La inteligencia artificial es un programa que aprende de datos y ayuda a automatizar tareas. En Blü Bee la usamos para que Daniela atienda por WhatsApp.');
+  mark = sent.length;
+  await incoming(RICKY_OWNER, '¿qué opinas de la inteligencia artificial?');
+  m = since(mark, RICKY_OWNER);
+  console.log('  (m-e) Ricky: charla vía cerebro:');
+  check('manda la respuesta del cerebro', hasText(m, /La inteligencia artificial es un programa que aprende/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'ricky' && /inteligencia/.test(q.pregunta)));
+  restoreBrain();
+  config.groqApiKey = realGroqKey;
+
+  // ---------- (n) Transcripción contaminada (v4.6, caso real de Peter
+  // 2026-11-13 12:03): su nota de voz "Daniela, ¿qué haces?" llegó
+  // transcrita mezclada con audio de fondo (la tele): "Se presume eran
+  // agentes... ¿Qué haces, Daniela? ...asesinados a mano." Daniela dijo
+  // "dame un segundo" porque ningún patrón veía la pregunta dentro del
+  // texto basura. Ahora isSmallTalkAboutDaniela busca la frase en
+  // cualquier parte del mensaje. SIN cerebro simulado (fetch restaurado,
+  // sin clave): la charla debe contestarse aunque el cerebro falle.
+  console.log('\n(n) Transcripción contaminada (v4.6):');
+  check('texto con tele: "Se presume eran agentes... ¿Qué haces, Daniela? ...asesinados a mano." es charla', daniela.isSmallTalkAboutDaniela('se presume eran agentes que haces daniela asesinados a mano'));
+  check('"¿qué haces tú en la empresa?" NO es charla (es su trabajo)', !daniela.isSmallTalkAboutDaniela('que haces tu en la empresa'));
+  check('"¿qué haces para los hoteles?" sigue sin ser charla', !daniela.isSmallTalkAboutDaniela('que haces para los hoteles'));
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Se presume eran agentes... ¿Qué haces, Daniela? ...asesinados a mano.');
+  m = since(mark, PETER_OWNER);
+  console.log('  (n-a) Peter: nota de voz transcrita con tele:');
+  check('contesta en primera persona', hasText(m, /Estoy trabajando, Pedro\. Soy una inteligencia artificial y no descanso/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /asesinados/.test(q.pregunta)));
 
   // ---------- (o) Redirección profesional para preguntas fuera de tema (v4.2,
   // orden de Peter 2026-11-13): fútbol, viajes, coqueteo, chistes... →
@@ -717,6 +823,79 @@ async function incoming(phone, text) {
   console.log('  (p-h) Regresión demo:');
   check('demo: pide día/hora de demostración', hasText(m, /¿Qué día y hora te conviene\?/) && st && st.stage === 'demo_when', `stage=${st && st.stage}`);
   check('demo: NO menciona reunión virtual', !hasText(m, /reuniones son virtuales|Google Meet o por Zoom/));
+
+  // ---------- (q) Nota de voz con otra voz metida (v4.7, orden de Peter
+  // 2026-11-13): si se mete la tele u otra persona y el texto no queda
+  // claro, Daniela pide que se lo repitan, no dice "dame un segundo" ni
+  // guarda pregunta pendiente. La transcripción se simula con fetch
+  // (Groq Whisper) y downloadMedia escribe un audio falso.
+  console.log('\n(q) Voz con ruido de fondo (v4.7):');
+  const realFetchQ = global.fetch;
+  const realGroqKeyQ = config.groqApiKey;
+  const realDownloadQ = wa.downloadMedia;
+  config.groqApiKey = 'test-fake-key';
+  wa.downloadMedia = async (id, dest) => { fs.writeFileSync(dest, Buffer.from('audio-falso')); };
+  async function incomingVoice(phone, transcribed) {
+    global.fetch = async () => ({ ok: true, json: async () => ({ text: transcribed }) });
+    await daniela.handleMessage({ from: phone, type: 'audio', audio: { id: 'voz-prueba' } });
+  }
+  // (q-a) Voz contaminada sin pregunta reconocible: pide repetir.
+  check('texto con tele y sin pregunta clara es confuso', daniela.looksGarbledTranscription('Se presume eran agentes... asesinados a mano... y el clima estará nublado mañana.', 'se presume eran agentes asesinados a mano y el clima estara nublado manana'));
+  check('texto con "¿qué haces?" dentro NO es confuso', !daniela.looksGarbledTranscription('Se presume eran agentes... ¿Qué haces, Daniela? ...asesinados a mano.', 'se presume eran agentes que haces daniela asesinados a mano'));
+  mark = sent.length;
+  await incomingVoice(PETER_OWNER, 'Se presume eran agentes... asesinados a mano... y el clima estará nublado mañana.');
+  m = since(mark, PETER_OWNER);
+  console.log('  (q-a) Peter: voz con tele, sin pregunta clara:');
+  check('pide que se lo repita', hasText(m, /no le escuché bien.*repetir/i));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /asesinados/.test(q.pregunta)));
+  // (q-b) Voz contaminada CON "¿qué haces?" dentro: se contesta, no se pide repetir.
+  mark = sent.length;
+  await incomingVoice(PETER_OWNER, 'Se presume eran agentes... ¿Qué haces, Daniela? ...asesinados a mano.');
+  m = since(mark, PETER_OWNER);
+  console.log('  (q-b) Peter: voz con tele pero con "¿qué haces?":');
+  check('contesta en primera persona', hasText(m, /Estoy trabajando, Pedro\. Soy una inteligencia artificial/));
+  check('NO pide repetir', !hasText(m, /repetir/));
+  // (q-c) Voz clara (sin "..."): flujo normal, no pide repetir.
+  mark = sent.length;
+  await incomingVoice(PETER_OWNER, '¿Cuál es el RFC de la empresa?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (q-c) Peter: voz clara, pregunta de negocio:');
+  check('NO pide repetir', !hasText(m, /repetir/));
+  check('dice "dame un segundo" (se investiga)', hasText(m, /Dame un segundo/));
+  global.fetch = realFetchQ;
+  config.groqApiKey = realGroqKeyQ;
+  wa.downloadMedia = realDownloadQ;
+
+  // (r) Saludo por hora y "¿qué hora es?" (v4.9, caso real 2026-11-13):
+  // Peter escribió "Buenas tardes" a las 5:43 p. m. y Daniela contestó
+  // "buenos días" dos veces; luego "Que hora es?" y le llegó la
+  // presentación institucional.
+  console.log('\n(r) Saludo por hora del día y "¿qué hora es?" (v4.9):');
+  // (r-a) greetingByTime devuelve un saludo válido según la hora.
+  const g = daniela.greetingByTime();
+  check('greetingByTime es un saludo válido', /^(buenos días|buenas tardes|buenas noches)$/.test(g), `greeting=${g}`);
+  // (r-b) isTimeQuestion distingue la hora actual de la hora de la demo.
+  check('"que hora es" -> true', daniela.isTimeQuestion('que hora es') === true);
+  check('"que horas son" -> true', daniela.isTimeQuestion('que horas son') === true);
+  check('"a que hora es la demo" -> false', daniela.isTimeQuestion('a que hora es la demo') === false);
+  check('"a que hora cierran" -> false', daniela.isTimeQuestion('a que hora cierran') === false);
+  check('"que hora es la demo" -> false', daniela.isTimeQuestion('que hora es la demo') === false);
+  // (r-c) timeReply contesta la hora en Ciudad de México.
+  const tr = daniela.timeReply();
+  check('timeReply dice la hora de CDMX', /(Es la|Son las) \d{1,2}:\d{2}/.test(tr) && /hora de la Ciudad de México/.test(tr), `reply=${tr}`);
+  // (r-d) ownerGreetingReply saluda con la hora del día correcta.
+  const og = daniela.ownerGreetingReply();
+  check('ownerGreetingReply usa la hora del día', /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias/.test(og), `greeting=${og}`);
+  // (r-e) Peter pregunta "Que hora es?" en vivo: Daniela contesta la hora,
+  // NO la presentación institucional.
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Que hora es?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (r-e) Peter: "Que hora es?":');
+  check('contesta la hora', hasText(m, /(Es la|Son las) \d{1,2}:\d{2}/));
+  check('NO contesta con la presentación institucional', !hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');

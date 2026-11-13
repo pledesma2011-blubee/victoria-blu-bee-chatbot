@@ -1741,6 +1741,47 @@ async function answerInfoQuestion(st, text, norm) {
   return false;
 }
 
+// Hora actual en Ciudad de México (v4.9): el servidor corre en UTC, así
+// que la hora local se calcula con la zona horaria de México.
+function mexicoCityHour() {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', hour12: false }).formatToParts(new Date());
+  const h = Number(parts.find((p) => p.type === 'hour').value);
+  return h % 24;
+}
+
+// Saludo según la hora del día (v4.9, 2026-11-13): Daniela ya no dice
+// siempre "buenos días". Caso real: Peter le escribió "Buenas tardes" a
+// las 5:43 p. m. y Daniela le contestó "buenos días" dos veces.
+function greetingByTime() {
+  const h = mexicoCityHour();
+  if (h >= 6 && h < 12) return 'buenos días';
+  if (h >= 12 && h < 20) return 'buenas tardes';
+  return 'buenas noches';
+}
+
+// Saludo al dueño (v4.9): con la hora del día correcta. Antes decía
+// siempre "buenos días", y a las 5:43 p. m. contestaba "buenos días" dos
+// veces seguidas. La repetición era síntoma del saludo con la hora
+// equivocada: con la hora correcta, Peter ya no tiene que cuestionarlo.
+function ownerGreetingReply() {
+  return `Hola Pedro, ${greetingByTime()}. Muy bien, gracias. ¿En qué le puedo ayudar?`;
+}
+
+// "¿Qué hora es?" (v4.9): pregunta por la hora actual. NO es "¿a qué hora
+// es la demo?" ni "¿a qué hora cierran?", que son preguntas de negocio.
+function isTimeQuestion(norm) {
+  if (/\ba que hora\b/.test(norm)) return false;
+  if (/\b(demo|reunion|cita|junta)\b/.test(norm)) return false;
+  return /\bque hora (es|son)\b/.test(norm) || /\bque horas son\b/.test(norm);
+}
+
+function timeReply() {
+  const h = mexicoCityHour();
+  const timeStr = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true });
+  const article = (h === 1 || h === 13) ? 'Es la' : 'Son las';
+  return `${article} ${timeStr}, hora de la Ciudad de México. ¿En qué te puedo ayudar?`;
+}
+
 // ---------- el corazón: procesar un mensaje entrante ----------
 
 async function handleMessage(msg) {
@@ -1819,6 +1860,17 @@ async function handleMessage(msg) {
   // guarda pregunta pendiente: no hay nada que investigar, hay que repetir.
   if (fromVoice && looksGarbledTranscription(text, norm)) {
     await wa.sendText(from, garbledVoiceReply(st));
+    saveState(st);
+    return;
+  }
+
+  // (v4.9, 2026-11-13): "¿Qué hora es?" — Daniela contesta la hora real
+  // en Ciudad de México. Antes caía al cerebro, que la trataba como fuera
+  // de tema y contestaba con la presentación institucional. Caso real:
+  // Peter preguntó "Que hora es?" a las 5:44 p. m. y le llegó el texto
+  // de "Soy Daniela, la asistente virtual...".
+  if (isTimeQuestion(norm)) {
+    await wa.sendText(from, timeReply());
     saveState(st);
     return;
   }
@@ -2493,7 +2545,7 @@ async function handleMainIntent(msg, st, text, norm) {
     if (sameNumber(from, config.peterWhatsApp)) {
       const rest = stripGreetingPrefix(norm);
       if (!rest) {
-        await wa.sendText(from, 'Hola Pedro, buenos días. Muy bien, gracias. ¿En qué le puedo ayudar?');
+        await wa.sendText(from, ownerGreetingReply());
         saveState(st);
         return;
       }
@@ -2853,7 +2905,7 @@ async function handleMainIntent(msg, st, text, norm) {
           saveState(st);
           return;
         }
-        await wa.sendText(from, 'Hola Pedro, buenos días. Muy bien, gracias. ¿En qué le puedo ayudar?');
+        await wa.sendText(from, ownerGreetingReply());
         saveState(st);
         return;
       }
@@ -3153,4 +3205,11 @@ module.exports = {
   parseMeetingPlatform,
   readLeads,
   confirmMeetingLead,
+  // Saludo por hora y "¿qué hora es?" (v4.9, 2026-11-13): Daniela saluda
+  // según la hora real en Ciudad de México y contesta la hora actual.
+  mexicoCityHour,
+  greetingByTime,
+  ownerGreetingReply,
+  isTimeQuestion,
+  timeReply,
 };
