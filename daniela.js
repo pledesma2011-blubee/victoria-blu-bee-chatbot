@@ -1679,6 +1679,15 @@ function detectIntent(text, norm) {
   if (contains(text, ['demostracion', 'demo', 'quiero una demo'])) return { kind: 'demo' };
   if (contains(text, ['reunion', 'reunión', 'junta', 'videollamada', 'videoconferencia', 'cita', 'meet', 'zoom'])) return { kind: 'meeting' };
   if (contains(text, ['agendar'])) return { kind: 'demo' };
+  // (v4.10): "soy Pedro" / "me llamo Pedro" / "cómo sabes que soy Pedro"
+  // NO es un recado para Pedro: es la persona identificándose o
+  // preguntando cómo Daniela sabe su nombre. No clasificar como
+  // 'pedro_message' (caso real 2026-11-14: Peter preguntó "Cómo sabes
+  // que soy Pedro?" y Daniela le contestó "¿Qué mensaje le dejo a la
+  // persona indicada?", como si fuera un extraño, justo después de
+  // saludarlo como Pedro).
+  if (/\b(soy|me llamo|mi nombre es)\s+pedro\b/.test(norm)) return null;
+  if (/como sabes (que )?(soy|me llamo|mi nombre es)/.test(norm)) return null;
   if (contains(text, ['pedro'])) return { kind: 'pedro_message' };
   if (contains(text, ['vendo', 'ofrezco', 'proveedor', 'les vendo', 'quiero venderles', 'servicio para ustedes', 'les ofrezco'])) return { kind: 'vendor' };
   if (contains(text, ['que es iot', 'que es el iot', 'que significa iot'])) return { kind: 'faq', key: 'iot' };
@@ -2682,6 +2691,16 @@ async function handleMainIntent(msg, st, text, norm) {
       // 2026-11-13: profesionalizar, no parchear cada frase). Si el
       // cerebro contesta algo útil, se manda; si dice "dame un segundo"
       // (dato concreto que no sabe) o no contesta, flujo anterior.
+      // (v4.10): Peter pregunta cómo Daniela sabe que es Pedro o cómo
+      // sabe su nombre. Respuesta directa y coherente: lo reconoce por
+      // su número, es el dueño. Sin esto, la pregunta caía en
+      // 'pedro_message' y Daniela le pedía el mensaje para "la persona
+      // indicada", como si no lo conociera.
+      if (/como sabes (que )?(soy|me llamo|mi nombre es)|como sabes mi nombre|como supiste que soy|por que sabes que soy/.test(norm)) {
+        await wa.sendText(from, 'Porque tu número está registrado como el dueño de Blü Bee, Pedro. Yo te reconozco por tu número, por eso te saludo por tu nombre. ¿En qué te puedo ayudar?');
+        saveState(st);
+        return;
+      }
       const brain = await brainReply(st, text);
       if (brain && !/^dame un segundo/i.test(brain)) {
         await wa.sendText(from, brain);

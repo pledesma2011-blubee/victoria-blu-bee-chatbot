@@ -966,6 +966,35 @@ async function incoming(phone, text) {
   check('recibe la redirección profesional', hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
   check('NO recibe las fechas del América', !hasText(m, /New York Red Bull/));
 
+  // (t) Coherencia de identidad (v4.10, caso real 2026-11-14): Peter
+  // saludó "Hola" a las 9:38 a. m., Daniela le contestó "Hola Pedro,
+  // buenos días", y al preguntar "Cómo sabes que soy Pedro?" Daniela le
+  // contestó "Claro. ¿Qué mensaje le dejo a la persona indicada?", como
+  // si fuera un extraño. Causa: detectIntent clasificaba cualquier
+  // mensaje con "pedro" como 'pedro_message', y el flujo del dueño solo
+  // corre cuando no hay intención.
+  console.log('\n(t) Coherencia de identidad del dueño (v4.10):');
+  // (t-a) detectIntent NO clasifica como 'pedro_message' la
+  // autoidentificación ni la pregunta de identidad.
+  check('"cómo sabes que soy pedro" NO es pedro_message', daniela.detectIntent('Cómo sabes que soy Pedro?', 'como sabes que soy pedro') === null);
+  check('"soy pedro" NO es pedro_message', daniela.detectIntent('Soy Pedro', 'soy pedro') === null);
+  check('"me llamo pedro" NO es pedro_message', daniela.detectIntent('Me llamo Pedro', 'me llamo pedro') === null);
+  // (t-b) Un recado real para Pedro SÍ sigue siendo 'pedro_message'.
+  const pm = daniela.detectIntent('Déjale un mensaje a Pedro', 'dejale un mensaje a pedro');
+  check('"déjale un mensaje a pedro" SÍ es pedro_message', pm && pm.kind === 'pedro_message');
+  const ph = daniela.detectIntent('Quiero hablar con Pedro', 'quiero hablar con pedro');
+  check('"quiero hablar con pedro" SÍ es pedro', ph && ph.kind === 'pedro');
+  // (t-c) Peter pregunta en vivo "Cómo sabes que soy Pedro?": Daniela
+  // le contesta directo y coherente, NO le pide el mensaje para "la
+  // persona indicada".
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Cómo sabes que soy Pedro?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (t-c) Peter: "Cómo sabes que soy Pedro?":');
+  check('contesta que lo reconoce por su número', hasText(m, /te reconozco por tu número/));
+  check('NO le pide el mensaje para la persona indicada', !hasText(m, /¿Qué mensaje le dejo a la persona indicada/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
   console.log('\n(verificación global):');
