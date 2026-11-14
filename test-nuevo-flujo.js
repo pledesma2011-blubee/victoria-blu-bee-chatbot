@@ -386,13 +386,14 @@ async function incoming(phone, text) {
   check('guarda la pregunta para Tomás', daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /empleados/.test(q.pregunta)));
 
   // (k-d) Ricky pregunta algo concreto que Daniela no tiene: "dame un
-  // segundo, te lo investigo".
+  // segundo, te lo investigo". (v5.0: "¿cuándo juega el América?" YA lo
+  // tiene cargado y lo contesta directo; aquí se usa un rival no cargado.)
   mark = sent.length;
-  await incoming(RICKY_OWNER, '¿cuándo juega el América?');
+  await incoming(RICKY_OWNER, '¿cuándo juega el América contra el León?');
   m = since(mark, RICKY_OWNER);
-  console.log('\n(k-d) Ricky: "¿cuándo juega el América?":');
+  console.log('\n(k-d) Ricky: "¿cuándo juega el América contra el León?":');
   check('dice que lo investiga', hasText(m, /Dame un segundo, te lo investigo y te doy una respuesta lo antes posible\./));
-  check('guarda la pregunta para Tomás', daniela.readPendingQuestions().some((q) => q.who === 'ricky' && /cuándo juega el América/.test(q.pregunta)));
+  check('guarda la pregunta para Tomás', daniela.readPendingQuestions().some((q) => q.who === 'ricky' && /cuándo juega el América contra el León/.test(q.pregunta)));
 
   // (k-e) Ricky charla casual ("qué calor hace"): NO se trata como
   // pregunta, sigue siendo charla cálida.
@@ -896,6 +897,74 @@ async function incoming(phone, text) {
   check('contesta la hora', hasText(m, /(Es la|Son las) \d{1,2}:\d{2}/));
   check('NO contesta con la presentación institucional', !hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
   check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+
+  // ---------- (s) Fechas del América para Ricky (v5.0, orden de Peter
+  // 2026-11-13): Daniela contesta por texto con las fechas cargadas, sin
+  // inventar ni decir "dame un segundo". Solo para Ricky: Peter y los
+  // extraños siguen recibiendo la redirección profesional (v4.2).
+  console.log('\n(s) Fechas del América para Ricky (v5.0):');
+  // (s-a) Respuestas directas (fecha fijada para no depender del día real).
+  const am = (t, n, d) => daniela.americaRickyReply(t, n, d);
+  const rFull = am('¿cuándo juega el América?', 'cuando juega el america', '2026-11-14');
+  check('"¿cuándo juega el América?" (sáb 14) -> amistoso + Leyendas', rFull && /New York Red Bull/.test(rFull) && /6:30/.test(rFull) && /Noche de Leyendas/.test(rFull), `reply=${rFull}`);
+  const rTime = am('¿a qué hora juega el América?', 'a que hora juega el america', '2026-11-14');
+  check('"¿a qué hora juega el América?" (sáb 14) -> 6:30', rTime === 'A las 6:30 de la tarde, hora del centro de México.', `reply=${rTime}`);
+  const rWhere = am('¿dónde puedo ver el partido del América?', 'donde puedo ver el partido del america', '2026-11-14');
+  check('"¿dónde puedo ver el partido del América?" -> Layvtime', rWhere && /Layvtime/.test(rWhere) && /YouTube/.test(rWhere), `reply=${rWhere}`);
+  const rVenue = am('¿dónde es el partido del América?', 'donde es el partido del america', '2026-11-14');
+  check('"¿dónde es el partido del América?" (sáb 14) -> Nueva Jersey', rVenue && /Nueva Jersey/.test(rVenue) && /Sports Illustrated Stadium/.test(rVenue), `reply=${rVenue}`);
+  const rSun = am('¿y el domingo?', 'y el domingo', '2026-11-14');
+  check('"¿y el domingo?" -> Noche de Leyendas', rSun && /Cuauhtémoc/.test(rSun) && /Atlético de Madrid/.test(rSun) && /6 de la tarde/.test(rSun), `reply=${rSun}`);
+  const rLegends = am('¿cuándo es la noche de leyendas?', 'cuando es la noche de leyendas', '2026-11-14');
+  check('"¿cuándo es la noche de leyendas?" -> domingo 15', rLegends && /Domingo 15/.test(rLegends), `reply=${rLegends}`);
+  const rTigres = am('¿cuál es el siguiente partido oficial del América?', 'cual es el siguiente partido oficial del america', '2026-11-14');
+  check('"¿siguiente partido oficial?" -> Tigres 21 nov', rTigres && /Tigres/.test(rTigres) && /9 de la noche/.test(rTigres), `reply=${rTigres}`);
+  check('rival no cargado (León) -> null', am('¿cuándo juega el América contra el León?', 'cuando juega el america contra el leon', '2026-11-14') === null);
+  check('"¿tienen cobertura en América Latina?" -> null', am('¿tienen cobertura en América Latina?', 'tienen cobertura en america latina', '2026-11-14') === null);
+  check('"¿quién ganó el América?" -> null', am('¿quién ganó el América?', 'quien gano el america', '2026-11-14') === null);
+  check('"vamos águilas" (porra, sin pregunta) -> null', am('¡vamos águilas!', 'vamos aguilas', '2026-11-14') === null);
+  const rSun15 = am('¿cuándo juega el América?', 'cuando juega el america', '2026-11-15');
+  check('"¿cuándo juega el América?" (dom 15) -> Leyendas, no el amistoso', rSun15 && /Leyendas/.test(rSun15) && !/New York Red Bull/.test(rSun15), `reply=${rSun15}`);
+  const rNov18 = am('¿cuándo juega el América?', 'cuando juega el america', '2026-11-18');
+  check('"¿cuándo juega el América?" (mié 18) -> Tigres', rNov18 && /Tigres/.test(rNov18), `reply=${rNov18}`);
+  check('"¿cuándo juega el América?" (dom 22, sin fechas) -> null', am('¿cuándo juega el América?', 'cuando juega el america', '2026-11-22') === null);
+  check('"¿a qué hora juega el América?" (dom 15) -> 6 de la tarde', /6 de la tarde/.test(am('¿a qué hora juega el América?', 'a que hora juega el america', '2026-11-15') || ''));
+  check('"hoy juega el América" (sáb 14) -> amistoso', /New York Red Bull/.test(am('hoy juega el América', 'hoy juega el america', '2026-11-14') || ''));
+  check('"hoy juega el América" (lun 16, sin partido) -> null', am('hoy juega el América', 'hoy juega el america', '2026-11-16') === null);
+  check('mexicoCityDateStr da AAAA-MM-DD', /^\d{4}-\d{2}-\d{2}$/.test(daniela.mexicoCityDateStr()), `hoy=${daniela.mexicoCityDateStr()}`);
+  // (s-b) En vivo con Ricky (hoy es sáb 14 nov): contesta las fechas,
+  // NO "dame un segundo" ni guarda pregunta pendiente.
+  mark = sent.length;
+  await incoming(RICKY_OWNER, '¿cuándo juega el América?');
+  m = since(mark, RICKY_OWNER);
+  console.log('  (s-b) Ricky: "¿cuándo juega el América?":');
+  check('contesta con el amistoso y Layvtime', hasText(m, /New York Red Bull/) && hasText(m, /Layvtime/));
+  check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'ricky' && /cuándo juega el América\?$/.test(q.pregunta)));
+  mark = sent.length;
+  await incoming(RICKY_OWNER, '¿a qué hora juega el América?');
+  m = since(mark, RICKY_OWNER);
+  console.log('  (s-b) Ricky: "¿a qué hora juega el América?":');
+  check('contesta 6:30 de la tarde', hasText(m, /6:30 de la tarde/));
+  mark = sent.length;
+  await incoming(RICKY_OWNER, '¿dónde puedo ver el partido del América?');
+  m = since(mark, RICKY_OWNER);
+  console.log('  (s-b) Ricky: "¿dónde puedo ver el partido del América?":');
+  check('contesta Layvtime gratis', hasText(m, /Gratis por Layvtime/));
+  // (s-c) Alcance: SOLO Ricky recibe las fechas. Peter y un extraño
+  // siguen con la redirección profesional (v4.2), no con las fechas.
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿cuándo juega el América?');
+  m = since(mark, PETER_OWNER);
+  console.log('  (s-c) Peter: "¿cuándo juega el América?" (no es Ricky):');
+  check('recibe la redirección profesional', hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
+  check('NO recibe las fechas del América', !hasText(m, /New York Red Bull/));
+  mark = sent.length;
+  await incoming(BRAIN, '¿cuándo juega el América?');
+  m = since(mark, BRAIN);
+  console.log('  (s-c) Extraño: "¿cuándo juega el América?":');
+  check('recibe la redirección profesional', hasText(m, /Soy Daniela, la asistente virtual de Blü Bee Technologies/));
+  check('NO recibe las fechas del América', !hasText(m, /New York Red Bull/));
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
