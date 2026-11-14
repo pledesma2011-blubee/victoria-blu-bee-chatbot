@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const wa = require('./whatsapp');
-const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion, confirmMeetingLead, groqMetrics, shadowSummary } = require('./daniela');
+const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion, confirmMeetingLead, groqMetrics, shadowSummary, simulationSummary } = require('./daniela');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -374,6 +374,20 @@ app.get('/metricas-sombra', (req, res) => {
     return res.json({ ok: true, ...shadowSummary() });
   } catch (e) {
     console.error('Error en /metricas-sombra:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Métricas del modo simulación (v5.3, orden de Peter 2026-11-14): las
+// decisiones del intérprete cuando Peter prueba en simulación (mensaje
+// recortado, intención de Groq y de palabras clave, confianza, si se usó).
+// Privacidad: el registro recorta el mensaje a 60 caracteres y borra las
+// entradas de más de 30 días.
+app.get('/metricas-simulacion', (req, res) => {
+  try {
+    return res.json({ ok: true, ...simulationSummary() });
+  } catch (e) {
+    console.error('Error en /metricas-simulacion:', e.message);
     return res.status(500).json({ ok: false, error: e.message });
   }
 });

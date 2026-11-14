@@ -1802,6 +1802,7 @@ const INTERPRET_INTENTS = new Set([
 function groqInterpretMode() {
   const m = (process.env.GROQ_INTERPRETE || 'sombra').trim().toLowerCase();
   if (m === 'off') return 'off';
+  if (m === 'simulacion') return 'simulacion';
   if (m === 'activo') console.log('[INTERPRETE] modo "activo" aún no habilitado (Fase 3a: solo sombra); se usa sombra.');
   return 'sombra';
 }
@@ -2053,12 +2054,19 @@ async function runShadowInterpret(from, identity, text, norm, keywordIntent) {
 // simulación SÍ entra, porque ahí actúa como prospecto (su identidad
 // queda anotada como 'simulacion' para distinguirlo en el reporte).
 function maybeRunShadow(from, st, text, norm, keywordIntent) {
-  if (groqInterpretMode() !== 'sombra') return null;
+  // La sombra corre en modo 'sombra' y en modo 'simulacion' (la
+  // recolección de las 50 muestras NO se pausa mientras Peter prueba).
+  // En modo 'simulacion', Peter en simulación NO entra a la sombra: su
+  // llamada al intérprete ya queda en el log de simulación (una sola
+  // llamada, no dos).
+  const modo = groqInterpretMode();
+  if (modo === 'off') return null;
   if (keywordIntent && (keywordIntent.kind === 'greeting' || keywordIntent.kind === 'farewell')) return null;
   const esDueno = sameNumber(from, config.peterWhatsApp);
   const esSimulacion = esDueno && isSimulationMode(st);
   if (isVipRicky(from)) return null;
   if (esDueno && !esSimulacion) return null;
+  if (esSimulacion && modo === 'simulacion') return null;
   const identidad = esSimulacion ? 'simulacion' : resolveIdentity(from);
   return runShadowInterpret(from, identidad, text, norm, keywordIntent).catch(() => null);
 }
@@ -2103,6 +2111,137 @@ function shadowSummary() {
     diferencias: list.filter((e) => !e.coincide).slice(-20),
     ultimas: list.slice(-10),
   };
+}
+
+// ---------- intérprete en modo simulación (v5.3, orden de Peter 2026-11-14) ----------
+// Peter quiere sentir la mejora antes de activarla para prospectos: con
+// GROQ_INTERPRETE=simulacion, cuando ÉL está en modo simulación, el
+// intérprete 20b DECIDE (en vez de las palabras clave). Para prospectos
+// reales, todo sigue igual (palabras clave + sombra). La activación para
+// prospectos sigue esperando el reporte de las 50 y su autorización.
+// Reglas: si el 20b falla, se tarda, devuelve JSON inválido o la confianza
+// es < 0.6, mandan las palabras clave. Nunca se queda sin respuesta.
+// Privacidad (orden de Peter 2026-11-14): el registro de simulación guarda
+// el mensaje recortado (60 caracteres) y borra las entradas de más de
+// 30 días al escribir.
+
+// Mapeo de la intención del intérprete al flujo de Daniela (ajuste 3 de
+// Peter: se completan soluciones, beneficios, saludo y despedida).
+// - soluciones y beneficios YA están en info_general (el prompt del
+//   intérprete los lista ahí). El flujo info usa la base de conocimiento:
+//   hay respuestas de soluciones, pero NO de beneficios (la base no tiene
+//   una entrada de beneficios) -> beneficios cae al cerebro, que contesta
+//   desde su base.
+// - saludo es 'charla' -> flujo de saludo.
+// - despedida NO está en la taxonomía del intérprete (no se cambió para no
+//   mover la sombra): el 20b la clasifica como 'charla', y aquí se distingue
+//   por las palabras clave de despedida (detectIntent 'farewell').
+// Devuelve un intent estilo detectIntent ({ kind, key? }) o null si la
+// charla la atiende el cerebro (p. ej. "¿qué haces?" en primera persona)
+// o si es fuera_de_tema/desconocida (el flujo no-intent + cerebro).
+function mapGroqIntentToKeyword(groqIntent, text, norm) {
+  switch (groqIntent) {
+    case 'info_general':
+    case 'como_funciona':
+      return { kind: 'info' };
+    case 'demo':
+      return { kind: 'demo' };
+    case 'reunion':
+      return { kind: 'meeting' };
+    case 'precio':
+      return { kind: 'price' };
+    case 'sector': {
+      const s = detectSector(text);
+      return s ? { kind: 'sector', key: s } : { kind: 'info' };
+    }
+    case 'recado_dueno':
+      return { kind: 'pedro_message' };
+    case 'vendedor':
+      return { kind: 'vendor' };
+    case 'charla': {
+      const kw = detectIntent(text, norm);
+      if (kw && kw.kind === 'farewell') return { kind: 'farewell' };
+      if (kw && kw.kind === 'greeting') return { kind: 'greeting' };
+      return null; // charla ("¿qué haces?") -> el cerebro contesta en primera persona
+    }
+    case 'fuera_de_tema':
+    case 'desconocida':
+    default:
+      return null;
+  }
+}
+
+// Registro de simulación (privacidad: texto recortado, borrado a 30 días).
+const SIMULACION_FILE = path.join(config.stateDir, 'simulacion.json');
+const SIMULACION_MAX_DIAS = 30;
+const SIMULACION_MAX_MENSAJE = 60;
+
+function readSimulationLog() {
+  try {
+    const list = JSON.parse(fs.readFileSync(SIMULACION_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+function pruneSimulationLog(list) {
+  const limite = Date.now() - SIMULACION_MAX_DIAS * 24 * 60 * 60 * 1000;
+  return list.filter((e) => {
+    const t = Date.parse(e.fecha || '');
+    return !Number.isNaN(t) && t >= limite;
+  });
+}
+
+function appendSimulationEntry(entry) {
+  try {
+    const list = pruneSimulationLog(readSimulationLog());
+    list.push(entry);
+    const trimmed = list.slice(-500);
+    fs.mkdirSync(config.stateDir, { recursive: true });
+    fs.writeFileSync(SIMULACION_FILE, JSON.stringify(trimmed, null, 2));
+    return true;
+  } catch (e) {
+    console.error('[SIMULACIÓN] no se pudo guardar la entrada:', e.message);
+    return false;
+  }
+}
+
+function simulationSummary() {
+  const list = pruneSimulationLog(readSimulationLog());
+  return {
+    modo: groqInterpretMode(),
+    modelo: GROQ_INTERPRET_MODEL,
+    total: list.length,
+    ultimas: list.slice(-20),
+  };
+}
+
+// Llama al intérprete (esperando el resultado) solo para Peter en modo
+// simulación cuando GROQ_INTERPRETE=simulacion. Devuelve el resultado del
+// 20b o null si no aplica (no es simulación, sin clave, sin presupuesto,
+// timeout, JSON inválido o confianza < 0.6). Nunca lanza. Registra la
+// decisión en el log de simulación (con privacidad).
+async function interpretForSimulation(from, st, text, norm, keywordIntent) {
+  if (groqInterpretMode() !== 'simulacion') return null;
+  if (!sameNumber(from, config.peterWhatsApp) || !isSimulationMode(st)) return null;
+  const result = await interpretWithGroq(text);
+  const usable = result.jsonValido && !result.error && result.confianza >= GROQ_CONFIDENCE_THRESHOLD;
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    fecha: new Date().toISOString(),
+    mensaje: String(text || '').slice(0, SIMULACION_MAX_MENSAJE),
+    keyword: keywordIntent ? keywordIntent.kind : null,
+    groq: result.intencion,
+    confianza: result.confianza,
+    usado: usable,
+    modelo: result.modelo,
+    latenciaMs: result.latenciaMs,
+    tokensTotal: result.tokensTotal,
+    jsonValido: result.jsonValido,
+    error: result.error,
+  };
+  appendSimulationEntry(entry);
+  console.log(`[SIMULACIÓN] groq=${entry.groq} conf=${entry.confianza} usado=${entry.usado} kw=${entry.keyword || 'null'} ${entry.latenciaMs}ms err=${entry.error || '-'}`);
+  return usable ? result : null;
 }
 
 // ---------- detección de intención (solo texto libre, sin menús) ----------
@@ -3266,7 +3405,7 @@ async function handleMainIntent(msg, st, text, norm) {
   const display = contactDisplayName(st);
   const nameSuffix = display ? `, ${display}` : '';
   const leTe = st.formality === 'tu' ? 'te' : 'le';
-  const intent = detectIntent(text, norm);
+  let intent = detectIntent(text, norm);
 
   // (Fase 3a, modo sombra): el intérprete corre en segundo plano y solo
   // registra qué intención habría elegido, comparada con detectIntent.
@@ -3274,6 +3413,22 @@ async function handleMainIntent(msg, st, text, norm) {
   // mensajes comerciales de prospectos (el dueño y Ricky no entran;
   // Peter en simulación sí, como prospecto).
   maybeRunShadow(from, st, text, norm, intent);
+
+  // (v5.3, modo simulación): si GROQ_INTERPRETE=simulacion y Peter está
+  // en simulación, el intérprete 20b DECIDE. Si devuelve una intención
+  // válida (confianza >= 0.6) y el mapeo da un flujo, esa intención manda;
+  // si no, mandan las palabras clave (nunca se queda sin respuesta).
+  // Para prospectos reales no cambia nada (aquí no se entra).
+  if (groqInterpretMode() === 'simulacion' && sameNumber(from, config.peterWhatsApp) && isSimulationMode(st)) {
+    const sim = await interpretForSimulation(from, st, text, norm, intent);
+    if (sim) {
+      const mapped = mapGroqIntentToKeyword(sim.intencion, text, norm);
+      if (mapped) {
+        console.log(`[SIMULACIÓN] el intérprete manda: ${sim.intencion} -> ${mapped.kind}`);
+        intent = mapped;
+      }
+    }
+  }
 
   // VIP Ricky (v3.4): los cariños y piropos de Ricky no son límite ni tema
   // de negocio: Daniela le responde con calidez, como amiga, y sigue. Solo
@@ -4000,6 +4155,10 @@ module.exports = {
   GROQ_CONFIDENCE_THRESHOLD,
   fetchWithTimeout,
   groqInterpretMode,
+  mapGroqIntentToKeyword,
+  interpretForSimulation,
+  simulationSummary,
+  readSimulationLog,
   interpretSystemPrompt,
   parseInterpretResult,
   interpretWithGroq,

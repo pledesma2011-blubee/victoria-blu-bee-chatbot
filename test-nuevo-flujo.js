@@ -1600,6 +1600,137 @@ check('"Hola" 2a vez NO repite el saludo fijo', !hasText(m, /Hola Pedro, (buenos
 global.fetch = realFetchX3;
 config.groqApiKey = realGroqKeyX3;
 
+  // (y) Intérprete en modo simulación (v5.3, orden de Peter 2026-11-14).
+  console.log('  (y) Intérprete solo en modo simulación (v5.3):');
+  // (y-1) groqInterpretMode con el nuevo modo.
+  console.log('    (y-1) groqInterpretMode:');
+  const realModeY = process.env.GROQ_INTERPRETE;
+  process.env.GROQ_INTERPRETE = 'simulacion';
+  check('modo "simulacion" -> "simulacion"', daniela.groqInterpretMode() === 'simulacion');
+  process.env.GROQ_INTERPRETE = 'off';
+  check('modo "off" -> "off"', daniela.groqInterpretMode() === 'off');
+  process.env.GROQ_INTERPRETE = 'activo';
+  check('modo "activo" -> "sombra" (aún no habilitado)', daniela.groqInterpretMode() === 'sombra');
+  delete process.env.GROQ_INTERPRETE;
+  check('sin variable -> "sombra" (por defecto)', daniela.groqInterpretMode() === 'sombra');
+  if (realModeY !== undefined) process.env.GROQ_INTERPRETE = realModeY;
+  // (y-2) Mapeo de intenciones (ajuste 3: soluciones, beneficios, saludo, despedida).
+  console.log('    (y-2) mapGroqIntentToKeyword:');
+  function normY(t) { return t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[¡!¿?.,;:()"-]/g, ' ').replace(/\s+/g, ' ').trim(); }
+  check('info_general -> info', daniela.mapGroqIntentToKeyword('info_general', '¿a qué se dedican?', normY('¿a qué se dedican?')).kind === 'info');
+  check('como_funciona -> info', daniela.mapGroqIntentToKeyword('como_funciona', '¿cómo funciona su tecnología?', normY('¿cómo funciona su tecnología?')).kind === 'info');
+  check('demo -> demo', daniela.mapGroqIntentToKeyword('demo', 'quiero ver una demo', normY('quiero ver una demo')).kind === 'demo');
+  check('reunion -> meeting', daniela.mapGroqIntentToKeyword('reunion', 'quiero agendar una reunión', normY('quiero agendar una reunión')).kind === 'meeting');
+  check('precio -> price', daniela.mapGroqIntentToKeyword('precio', '¿cuánto cuesta?', normY('¿cuánto cuesta?')).kind === 'price');
+  check('sector hotel -> sector:hotel', (() => { const r = daniela.mapGroqIntentToKeyword('sector', '¿y para un hotel?', normY('¿y para un hotel?')); return r.kind === 'sector' && r.key === 'hotel'; })());
+  check('recado_dueno -> pedro_message', daniela.mapGroqIntentToKeyword('recado_dueno', 'quiero hablar con el dueño', normY('quiero hablar con el dueño')).kind === 'pedro_message');
+  check('vendedor -> vendor', daniela.mapGroqIntentToKeyword('vendedor', 'les vendo publicidad', normY('les vendo publicidad')).kind === 'vendor');
+  check('charla + saludo -> greeting', daniela.mapGroqIntentToKeyword('charla', 'Hola', normY('Hola')).kind === 'greeting');
+  check('charla + despedida -> farewell', daniela.mapGroqIntentToKeyword('charla', 'Adiós, gracias', normY('Adiós, gracias')).kind === 'farewell');
+  check('charla + "¿qué haces?" -> null (el cerebro contesta en primera persona)', daniela.mapGroqIntentToKeyword('charla', '¿qué haces?', normY('¿qué haces?')) === null);
+  check('fuera_de_tema -> null', daniela.mapGroqIntentToKeyword('fuera_de_tema', '¿y el clima de mañana?', normY('¿y el clima de mañana?')) === null);
+  check('desconocida -> null', daniela.mapGroqIntentToKeyword('desconocida', '¿cuántos empleados tienen?', normY('¿cuántos empleados tienen?')) === null);
+  // (y-3) Decisión en simulación: el 20b manda; respaldo a palabras clave.
+  console.log('    (y-3) Decisión en simulación (fetch simulado):');
+  const realFetchY = global.fetch;
+  const realGroqKeyY = config.groqApiKey;
+  config.groqApiKey = 'test-fake-key';
+  process.env.GROQ_INTERPRETE = 'simulacion';
+  daniela.groqTokenReset();
+  function mockSim(interpJson, brainContent) {
+    global.fetch = async (url, opts) => {
+      const body = JSON.parse(opts.body || '{}');
+      if (body.model === 'openai/gpt-oss-20b') {
+        return { ok: true, json: async () => ({ choices: [{ message: { content: interpJson } }], usage: { prompt_tokens: 340, completion_tokens: 80, total_tokens: 420 } }) };
+      }
+      return { ok: true, json: async () => ({ choices: [{ message: { content: brainContent || 'Respuesta del cerebro.' } }] }) };
+    };
+  }
+  function simState() {
+    fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+      phone: PETER_OWNER, stage: 'main', name: 'Pedro', preferredName: 'Pedro',
+      formality: 'tu', handedOff: false, simulation: true,
+    }, null, 2));
+  }
+  // El 20b dice info_general para "¿a qué se dedican?" (las palabras clave
+  // dan null): Daniela da la explicación de Blü Bee (flujo info).
+  simState();
+  mockSim('{"intencion":"info_general","confianza":0.95,"tema":null}', 'Respuesta del cerebro.');
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿a qué se dedican?');
+  m = since(mark, PETER_OWNER);
+  check('"¿a qué se dedican?" (20b info_general) -> explicación de Blü Bee', hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas/));
+  check('"¿a qué se dedican?" NO da la respuesta genérica del cerebro', !hasText(m, /Respuesta del cerebro/));
+  // El 20b dice 'charla' para "¿qué haces?": el mapeo da null -> el cerebro contesta en primera persona.
+  simState();
+  mockSim('{"intencion":"charla","confianza":0.9,"tema":null}', 'Estoy trabajando. Soy una inteligencia artificial y no descanso.');
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿qué haces?');
+  m = since(mark, PETER_OWNER);
+  check('"¿qué haces?" (20b charla) -> el cerebro en primera persona', hasText(m, /Estoy trabajando\. Soy una inteligencia artificial/));
+  // Confianza baja (< 0.6): mandan las palabras clave (demo).
+  simState();
+  mockSim('{"intencion":"precio","confianza":0.4,"tema":null}', 'Respuesta del cerebro.');
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'quiero ver una demo, pero no sé cómo');
+  m = since(mark, PETER_OWNER);
+  check('confianza 0.4 -> mandan las palabras clave (demo)', hasText(m, /La demostración es gratuita/));
+  // El 20b falla (fetch lanza): mandan las palabras clave, sin silencio.
+  simState();
+  global.fetch = async () => { throw new Error('red caída'); };
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿cuánto cuesta?');
+  m = since(mark, PETER_OWNER);
+  check('el 20b falla -> mandan las palabras clave (precio)', hasText(m, /Los precios son cotizaciones personalizadas/));
+  // (y-4) Registro de simulación: privacidad (recorte + borrado a 30 días).
+  console.log('    (y-4) Registro de simulación (privacidad):');
+  const simLogPath = path.join(tmpDir, 'simulacion.json');
+  const oldDate = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(simLogPath, JSON.stringify([
+    { id: 'vieja', fecha: oldDate, mensaje: 'mensaje viejo que debe borrarse', keyword: null, groq: 'info_general', confianza: 0.9, usado: true },
+  ], null, 2));
+  simState();
+  mockSim('{"intencion":"demo","confianza":0.95,"tema":null}', 'Respuesta del cerebro.');
+  const stY = JSON.parse(fs.readFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), 'utf8'));
+  const resY = await daniela.interpretForSimulation(PETER_OWNER, stY, 'x'.repeat(100), normY('x'.repeat(100)), null);
+  check('interpretForSimulation devuelve el resultado usable', !!resY && resY.intencion === 'demo');
+  const logY = daniela.readSimulationLog();
+  check('el log borra la entrada de más de 30 días', logY.length === 1 && logY[0].id !== 'vieja');
+  check('el log recorta el mensaje a 60 caracteres', logY.length === 1 && logY[0].mensaje.length === 60);
+  check('el log guarda groq/confianza/usado', logY.length === 1 && logY[0].groq === 'demo' && logY[0].confianza === 0.95 && logY[0].usado === true);
+  // (y-5) La sombra sigue para prospectos reales en modo 'simulacion'
+  // (la recolección de las 50 NO se pausa), pero Peter en simulación ya no
+  // entra (su llamada queda en el log de simulación, no dos veces).
+  console.log('    (y-5) La sombra sigue en modo simulacion (prospectos):');
+  config.groqApiKey = '';
+  const PROSPECT_Y = '521111111111';
+  fs.writeFileSync(path.join(tmpDir, `${PROSPECT_Y}.json`), JSON.stringify({
+    phone: PROSPECT_Y, stage: 'main', name: 'Test', preferredName: 'Test',
+    formality: 'usted', handedOff: false,
+  }, null, 2));
+  const stProspect = JSON.parse(fs.readFileSync(path.join(tmpDir, `${PROSPECT_Y}.json`), 'utf8'));
+  const shadowProspect = daniela.maybeRunShadow(PROSPECT_Y, stProspect, '¿a qué se dedican?', normY('¿a qué se dedican?'), null);
+  check('prospecto real en modo simulacion -> la sombra SÍ corre (no null)', shadowProspect !== null);
+  if (shadowProspect) await shadowProspect.catch(() => null);
+  simState();
+  const stSimY = JSON.parse(fs.readFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), 'utf8'));
+  const shadowSim = daniela.maybeRunShadow(PETER_OWNER, stSimY, '¿a qué se dedican?', normY('¿a qué se dedican?'), null);
+  check('Peter en simulación (modo simulacion) -> la sombra NO corre (una sola llamada)', shadowSim === null);
+  // (y-6) Línea base en simulación sin intérprete (modo off): "¿qué haces?"
+  // va al cerebro en primera persona (la corrección v5.2.2, ajuste 2).
+  console.log('    (y-6) Línea base en simulación sin intérprete (modo off):');
+  process.env.GROQ_INTERPRETE = 'off';
+  config.groqApiKey = 'test-fake-key';
+  mockSim('{"intencion":"info_general","confianza":0.95,"tema":null}', 'Estoy trabajando. Soy una inteligencia artificial y no descanso.');
+  simState();
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿qué haces?');
+  m = since(mark, PETER_OWNER);
+  check('"¿qué haces?" en simulación (sin intérprete) -> primera persona', hasText(m, /Estoy trabajando\. Soy una inteligencia artificial/));
+  global.fetch = realFetchY;
+  config.groqApiKey = realGroqKeyY;
+  if (realModeY !== undefined) process.env.GROQ_INTERPRETE = realModeY; else delete process.env.GROQ_INTERPRETE;
+
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
   console.log('\n(verificación global):');

@@ -217,6 +217,30 @@ const KNOWLEDGE = [
     offerVideo: true,
   },
   {
+    id: 'beneficios',
+    // Beneficios de implementar IoT (v5.3, 2026-11-14): el intérprete
+    // clasifica "¿qué beneficios?" como info_general y el flujo info
+    // necesita una respuesta específica (antes caía al cerebro).
+    patterns: [
+      'que beneficios', 'beneficios de', 'que ventajas', 'ventajas de',
+      'que gano', 'que ganamos', 'que me aporta', 'beneficio de',
+    ],
+    answer: 'Los beneficios son saber lo que pasa en su negocio en tiempo real: dónde está cada persona y equipo, qué zonas se visitan más, y recibir alertas cuando algo sale de lo esperado. Todo se ve en tableros y mapas, y le ayuda a tomar decisiones con información, no con suposiciones. Cada caso es distinto, por eso preparamos una propuesta a la medida.',
+  },
+  {
+    id: 'comofunciona',
+    // Cómo funciona la tecnología en general (v5.3, 2026-11-14): el
+    // intérprete clasifica "¿cómo funciona?" como como_funciona y el flujo
+    // info necesita una respuesta general (antes caía al cerebro).
+    patterns: [
+      'como funciona su tecnologia', 'como funciona la tecnologia',
+      'como funciona blu bee', 'como funciona blubee',
+      'como funciona su sistema', 'como funciona el sistema',
+      'como funciona la solucion', 'como funciona su solucion',
+    ],
+    answer: 'Funciona así: instalamos beacons Bluetooth y sensores en su lugar, que mandan información en tiempo real a nuestra plataforma. Ahí usted lo ve todo en mapas y tableros, con alertas cuando algo sale de lo esperado. No necesita cambiar nada de lo que ya tiene: lo diseñamos para su caso.',
+  },
+  {
     id: 'kiosco',
     patterns: ['kiosco', 'kiosko', 'quiosco', 'totem', 'pantalla'],
     answer: 'Sí, también hacemos kioscos: una pantalla o una página web con el mapa y las rutas, para que el visitante se guíe sin instalar nada. Le muestra las indicaciones paso a paso y con un código QR se lleva la ruta a su celular. Es una buena forma de empezar sin una app completa.',
