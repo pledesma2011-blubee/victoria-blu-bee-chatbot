@@ -1848,6 +1848,7 @@ function interpretSystemPrompt() {
   return [
     'Eres el intérprete de intenciones de Daniela, asistente virtual de Blü Bee Technologies (empresa mexicana de IoT para empresas). Clasifica el mensaje del usuario en UNA intención de esta lista y responde SOLO con JSON, sin texto extra.',
     'Intenciones: info_general (qué hace la empresa, a qué se dedican, qué soluciones ofrecen, beneficios, para qué sirve), como_funciona (cómo funciona la tecnología o la solución), demo (quiere agendar una demostración), reunion (quiere agendar reunión, junta, videollamada o cita), precio (precio, costo o cotización), sector (pregunta por un sector o describe un problema de su negocio), recado_dueno (dejar un mensaje para el dueño o hablar con la persona indicada), vendedor (ofrece un producto o servicio, es proveedor), charla (saludo o charla casual), fuera_de_tema (fútbol, viajes, compras personales, clima, noticias, chistes, coqueteo), desconocida (no se entiende qué quiere).',
+    'OJO: "¿qué haces?" o "¿qué estás haciendo?" preguntan por DANIELA (la asistente), NO por la empresa: son charla, nunca info_general. "¿qué hacen?" o "¿qué hace la empresa?" sí preguntan por la empresa: son info_general.',
     'Responde SOLO este JSON: {"intencion":"...","confianza":0.0,"tema":"..."} La confianza es de 0 a 1. Si no estás seguro, usa "desconocida" con confianza baja.',
   ].join('\n');
 }
@@ -3421,6 +3422,28 @@ async function handleMainIntent(msg, st, text, norm) {
   // mensajes comerciales de prospectos (el dueño y Ricky no entran;
   // Peter en simulación sí, como prospecto).
   maybeRunShadow(from, st, text, norm, intent);
+
+  // (v5.3.2, hallazgo de Peter 2026-11-14): "¿qué haces?" es charla
+  // sobre Daniela, NO una pregunta de negocio. El intérprete 20b la
+  // clasificó como info_general (0.95) y la mandó al flujo info (la
+  // explicación general). La charla sobre Daniela es una regla dura
+  // (v4.4) que el intérprete NO puede anular: se atiende ANTES de que
+  // el intérprete decida, con la respuesta en primera persona (texto
+  // fijo aprobado, sin cerebro).
+  // No aplica si el mensaje empieza con un saludo ("Hola Daniela,
+  // ¿qué haces?" es un ritual de saludo que atiende el caso 'greeting').
+  const startsWithGreeting = /^(hola|buenos dias|buenas tardes|buenas noches|buen dia|buenas|que onda|que tal|como estas|como estan|disculpa|oye)\b/.test(norm || '');
+  if (isSmallTalkAboutDaniela(norm) && !startsWithGreeting) {
+    if (isVipRicky(from)) {
+      await sendReply(from, st, vipCasualReply(st, text), text);
+    } else if (sameNumber(from, config.peterWhatsApp)) {
+      await sendReply(from, st, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?', text);
+    } else {
+      await sendReply(from, st, 'Estoy trabajando. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué le puedo ayudar?', text);
+    }
+    saveState(st);
+    return;
+  }
 
   // (v5.3, modo simulación): si GROQ_INTERPRETE=simulacion y Peter está
   // en simulación, el intérprete 20b DECIDE. Si devuelve una intención

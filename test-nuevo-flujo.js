@@ -1670,7 +1670,7 @@ config.groqApiKey = realGroqKeyX3;
   mark = sent.length;
   await incoming(PETER_OWNER, '¿qué haces?');
   m = since(mark, PETER_OWNER);
-  check('"¿qué haces?" (20b charla) -> el cerebro en primera persona', hasText(m, /Estoy trabajando\. Soy una inteligencia artificial/));
+  check('"¿qué haces?" (20b charla) -> primera persona (guardia v5.3.2, no el cerebro)', hasText(m, /Estoy trabajando(, Pedro)?\. Soy una inteligencia artificial y no descanso/));
   // Confianza baja (< 0.6): mandan las palabras clave (demo).
   simState();
   mockSim('{"intencion":"precio","confianza":0.4,"tema":null}', 'Respuesta del cerebro.');
@@ -1729,7 +1729,7 @@ config.groqApiKey = realGroqKeyX3;
   mark = sent.length;
   await incoming(PETER_OWNER, '¿qué haces?');
   m = since(mark, PETER_OWNER);
-  check('"¿qué haces?" en simulación (sin intérprete) -> primera persona', hasText(m, /Estoy trabajando\. Soy una inteligencia artificial/));
+  check('"¿qué haces?" en simulación (sin intérprete) -> primera persona', hasText(m, /Estoy trabajando(, Pedro)?\. Soy una inteligencia artificial y no descanso/));
   global.fetch = realFetchY;
   config.groqApiKey = realGroqKeyY;
   if (realModeY !== undefined) process.env.GROQ_INTERPRETE = realModeY; else delete process.env.GROQ_INTERPRETE;
@@ -1780,6 +1780,23 @@ config.groqApiKey = realGroqKeyX3;
   check('z-2: segunda respuesta referencia lo anterior ("Como le comentaba")', segunda.some((b) => /Como le comentaba/.test(b)));
   global.fetch = realFetchZ;
   config.groqApiKey = realGroqKeyZ;
+
+  // (z-3) v5.3.2 — el intérprete NO puede anular la charla sobre Daniela:
+  // el 20b clasificó "¿qué haces?" como info_general (0.95) y la mandó al
+  // flujo info (explicación general). Con la guardia, "¿qué haces?" en
+  // simulación contesta en primera persona aunque el 20b diga info_general.
+  console.log('    (z-3) Guardia charla-sobre-Daniela vs intérprete:');
+  process.env.GROQ_INTERPRETE = 'simulacion';
+  config.groqApiKey = 'test-fake-key';
+  mockSim('{"intencion":"info_general","confianza":0.95,"tema":null}', 'Respuesta del cerebro.');
+  simState();
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿qué haces?');
+  m = since(mark, PETER_OWNER);
+  check('z-3: "¿qué haces?" (20b dice info_general) -> primera persona, NO la explicación general', hasText(m, /Estoy trabajando(, Pedro)?\. Soy una inteligencia artificial y no descanso/) && !hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas/));
+  global.fetch = realFetchY;
+  config.groqApiKey = realGroqKeyY;
+  if (realModeY !== undefined) process.env.GROQ_INTERPRETE = realModeY; else delete process.env.GROQ_INTERPRETE;
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
