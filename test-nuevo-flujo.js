@@ -995,6 +995,31 @@ async function incoming(phone, text) {
   check('NO le pide el mensaje para la persona indicada', !hasText(m, /¿Qué mensaje le dejo a la persona indicada/));
   check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
 
+  // (u) Autocuración del dueño (v4.11, caso real 2026-11-14): el bug de
+  // 'pedro_message' (v4.10) dejó el estado de Peter en 'taking_message',
+  // y su siguiente "Hola" (9:47 a. m.) corrió el flujo de extraño
+  // completo: aviso a él mismo, "ya le pasé su mensaje al área",
+  // resumen, voz y video de cierre. Con v4.11, el dueño nunca queda
+  // atrapado en una etapa de captación de leads: al llegar su mensaje,
+  // la etapa se regresa sola a 'main'.
+  console.log('\n(u) Autocuración del dueño atrapado en taking_message (v4.11):');
+  // Simula el estado corrupto: Peter quedó en 'taking_message' con
+  // necesidad de recado (como lo dejó el bug de las 9:39).
+  fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+    phone: PETER_OWNER, stage: 'taking_message', name: 'Pedro', preferredName: 'Pedro',
+    formality: 'usted', need: 'Recado para la persona indicada', handedOff: false,
+  }, null, 2));
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Hola');
+  m = since(mark, PETER_OWNER);
+  st = readState(PETER_OWNER);
+  console.log('  (u-a) Peter con estado corrupto ("taking_message") dice "Hola":');
+  check('la etapa se autocura a main', st && st.stage === 'main', `stage=${st && st.stage}`);
+  check('recibe el saludo de dueño, no el flujo de recado', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('NO le pasa el mensaje al área', !hasText(m, /Ya le pasé su mensaje al área correspondiente/));
+  check('NO le manda el aviso de recado a él mismo', !hasText(m, /Nuevo recado de Pedro/));
+  check('NO cierra la conversación con resumen', !hasText(m, /Antes de despedirme, le confirmo/));
+
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
   console.log('\n(verificación global):');

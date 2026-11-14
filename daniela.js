@@ -1926,6 +1926,22 @@ async function handleMessage(msg) {
     saveState(st);
   }
 
+  // (v4.11): el dueño NUNCA queda atrapado en 'taking_message'.
+  // Caso real 2026-11-14: el bug de 'pedro_message' (v4.10) dejó el
+  // estado de Peter en 'taking_message', y su siguiente "Hola" corrió
+  // el flujo de extraño completo (aviso a él mismo, "ya le pasé su
+  // mensaje al área", resumen, voz y video de cierre). Si el dueño
+  // llega en 'taking_message', la etapa se regresa sola a 'main' y se
+  // le atiende como dueño. Solo 'taking_message': las demás etapas
+  // ('handed_off', captura de datos) se respetan, porque el comando
+  // "reiniciar daniela" es el que saca de 'handed_off' y el flujo de
+  // captura de contacto lo usa el propio Peter.
+  if (sameNumber(from, config.peterWhatsApp) && st.stage === 'taking_message') {
+    st.stage = 'main';
+    st.need = null;
+    saveState(st);
+  }
+
   // Texto del mensaje (o texto del botón que tocó, por compatibilidad)
   let text = '';
   let fromVoice = false;
