@@ -856,6 +856,106 @@ function vipCasualReply(st, text) {
   return variants[idx];
 }
 
+// ---------- fechas del América para Ricky (v5.0, orden de Peter 2026-11-13) ----------
+// Acordado con Peter el vie 2026-11-13: cargar las fechas del América en
+// Daniela para que Ricky (VIP) pueda preguntar por ellas y Daniela le
+// conteste por texto con datos cargados, sin inventar la hora ni decir
+// "dame un segundo". Fuente: workspace/goals/bl-bee-whatsapp-chatbot/files/
+// america-fechas-ricky.md (verificado por búsqueda web 2026-11-13).
+// SOLO para Ricky: a los demás el fútbol sigue siendo fuera de tema (v4.2)
+// o va al cerebro. Las fechas son de noviembre de 2026; al pasar el 21 de
+// noviembre no queda ningún partido cargado y la función devuelve null, así
+// Daniela vuelve al flujo normal ("dame un segundo") en vez de contestar
+// con partidos ya jugados.
+const AMERICA_RICKY_FULL = 'Este sábado 14 de noviembre a las 6:30 de la tarde contra el New York Red Bull, en Nueva Jersey, y se ve gratis por Layvtime. Y el domingo 15 a las 6 de la tarde es la Noche de Leyendas contra el Atlético de Madrid en Puebla, por el 110 aniversario. ¡Vamos Ricky, hoy juega nuestro equipo!';
+const AMERICA_RICKY_TIME = 'A las 6:30 de la tarde, hora del centro de México.';
+const AMERICA_RICKY_WHERE = 'Gratis por Layvtime, en YouTube, Twitch, TikTok o Facebook.';
+const AMERICA_RICKY_VENUE = 'En Nueva Jersey, en el Sports Illustrated Stadium de Harrison.';
+const AMERICA_RICKY_SUNDAY = 'Domingo 15 a las 6 de la tarde, Leyendas del América contra Leyendas del Atlético de Madrid en el Estadio Cuauhtémoc de Puebla. Vuelven Cuauhtémoc Blanco y Cabañas, y del Atlético vienen Falcao, Villa y Godín.';
+const AMERICA_RICKY_TIGRES = 'Sábado 21 de noviembre a las 9 de la noche contra Tigres en el Universitario, jornada 17. El América pelea el liderato.';
+
+// Fecha de hoy en Ciudad de México, 'AAAA-MM-DD'. Se usa para contestar
+// con el próximo partido cargado en vez de uno ya jugado.
+function mexicoCityDateStr(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const get = (t) => parts.find((p) => p.type === t).value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+// Próximo partido del América con datos cargados, según la fecha de hoy:
+// sáb 14 nov → el amistoso y la Noche de Leyendas; dom 15 nov → Leyendas;
+// 16-21 nov → Tigres; después del 21 nov → null (nada cargado).
+function americaNextMatchReply(today) {
+  if (today <= '2026-11-14') return AMERICA_RICKY_FULL;
+  if (today === '2026-11-15') return AMERICA_RICKY_SUNDAY;
+  if (today <= '2026-11-21') return AMERICA_RICKY_TIGRES;
+  return null;
+}
+
+// Respuesta con las fechas del América cargadas, o null si el mensaje no
+// pregunta por un partido cargado. `today` es 'AAAA-MM-DD' en Ciudad de
+// México (opcional: por defecto hoy; en pruebas se fija para no depender
+// de la fecha real). Solo se llama para Ricky (VIP).
+function americaRickyReply(text, norm, today) {
+  const n = ` ${norm} `;
+  const mentionsAmerica = n.includes(' america ') || n.includes(' aguilas ');
+  const mentionsSunday = /\bdomingo\b/.test(norm);
+  const mentionsLegends = /\bleyendas\b/.test(norm) || /\batletico\b/.test(norm);
+  const mentionsTigres = /\btigres\b/.test(norm);
+  const day = today || mexicoCityDateStr();
+  // Sin partidos cargados después del 21 de noviembre: no contestar con
+  // fechas viejas; que siga el flujo normal ("dame un segundo").
+  if (day > '2026-11-21') return null;
+  // Otro rival que NO está cargado (León, Chivas...): no contestar con las
+  // fechas de otro partido; que siga el flujo normal.
+  const OTHER_TEAMS = ['leon', 'chivas', 'cruz azul', 'pumas', 'rayados', 'monterrey', 'toluca', 'santos', 'atlas', 'pachuca', 'necaxa', 'mazatlan', 'juarez', 'tijuana', 'san luis', 'queretaro', 'guadalajara', 'real madrid', 'barcelona'];
+  if (OTHER_TEAMS.some((t) => n.includes(` ${t} `))) return null;
+  // Siguiente partido oficial: Tigres, sáb 21 nov, 21:00.
+  if (mentionsTigres || (mentionsAmerica && /\b(siguiente|proximo)\b/.test(norm) && /\boficial\b/.test(norm))) {
+    if (/\b(cuando|que dia|a que hora|donde|juega|juegan|siguiente|proximo|oficial)\b/.test(norm)) return AMERICA_RICKY_TIGRES;
+  }
+  // Noche de Leyendas, dom 15 nov: "¿y el domingo?", "¿cuándo es la noche
+  // de leyendas?", "¿a qué hora es el partido del domingo?"...
+  const sundayContext = mentionsLegends
+    || (mentionsSunday && (mentionsAmerica || /\bpartido\b/.test(norm) || /\b(quien|quienes)\b/.test(norm) || /\bque hay\b/.test(norm) || /^(y )?el domingo$/.test(norm)));
+  if (sundayContext) return AMERICA_RICKY_SUNDAY;
+  // "¿Dónde lo veo?" (sábado): gratis por Layvtime. La transmisión del
+  // domingo no está cargada: si pregunta por el domingo, no inventar.
+  if (mentionsAmerica && /\bdonde\b/.test(norm) && /\b(veo|ver|pasan|transmiten)\b/.test(norm)) {
+    if (day <= '2026-11-14' || /\bred bull\b/.test(norm) || /\bnew york\b/.test(norm)) return AMERICA_RICKY_WHERE;
+    return null;
+  }
+  // "¿Dónde es el partido?": sábado en Nueva Jersey, domingo en Puebla,
+  // y contra Tigres en el Universitario (va en su propia respuesta).
+  if (mentionsAmerica && /\bdonde\b/.test(norm) && /\b(es|juega|queda|esta|se juega)\b/.test(norm)) {
+    if (day <= '2026-11-14') return AMERICA_RICKY_VENUE;
+    if (day === '2026-11-15') return AMERICA_RICKY_SUNDAY;
+    if (day <= '2026-11-21') return AMERICA_RICKY_TIGRES;
+    return null;
+  }
+  // "¿A qué hora juega el América?" (sábado, 18:30). El domingo es a las
+  // 18:00 y Tigres a las 21:00: esas horas van en su propia respuesta.
+  if (mentionsAmerica && /\ba que hora\b/.test(norm)) {
+    if (day === '2026-11-15') return AMERICA_RICKY_SUNDAY;
+    if (day >= '2026-11-16') return AMERICA_RICKY_TIGRES;
+    return AMERICA_RICKY_TIME;
+  }
+  // "Hoy juega el América": solo si hoy hay partido cargado; otro día la
+  // afirmación no es cierta y no se contesta con otro partido.
+  if (mentionsAmerica && /\bhoy\b/.test(norm) && /\bjuega\b/.test(norm)) {
+    if (day === '2026-11-14') return AMERICA_RICKY_FULL;
+    if (day === '2026-11-15') return AMERICA_RICKY_SUNDAY;
+    if (day === '2026-11-21') return AMERICA_RICKY_TIGRES;
+    return null;
+  }
+  // "¿Cuándo juega el América?" / "¿cuál es el próximo partido?": el
+  // próximo partido cargado según la fecha de hoy.
+  if (mentionsAmerica && /\b(cuando|proximo|siguiente|partido)\b/.test(norm)) {
+    return americaNextMatchReply(day);
+  }
+  return null;
+}
+
 // Revisa los límites para un mensaje. Se llama DESPUÉS del filtro de estafa
 // y del comando de reinicio de Pedro, y ANTES del flujo normal, así aplica
 // en TODAS las etapas (también mientras espera nombre/empresa/contacto: un
@@ -1873,6 +1973,20 @@ async function handleMessage(msg) {
     await wa.sendText(from, timeReply());
     saveState(st);
     return;
+  }
+
+  // (v5.0, orden de Peter 2026-11-13): fechas del América para Ricky
+  // (VIP). Si Ricky pregunta por el América con datos cargados, Daniela
+  // le contesta por texto con la respuesta lista, sin pasar por el cerebro
+  // (que no tiene datos en vivo e inventaría la hora) ni decir "dame un
+  // segundo". Solo para Ricky; para los demás el fútbol sigue su flujo.
+  if (isVipRicky(from)) {
+    const americaReply = americaRickyReply(text, norm);
+    if (americaReply) {
+      await wa.sendText(from, americaReply);
+      saveState(st);
+      return;
+    }
   }
 
   // VIP Ricky (orden de Peter 2026-11-11): Daniela SIEMPRE le contesta a
@@ -3212,4 +3326,9 @@ module.exports = {
   ownerGreetingReply,
   isTimeQuestion,
   timeReply,
+  // Fechas del América para Ricky (v5.0, 2026-11-14): Daniela contesta por
+  // texto con las fechas cargadas (sáb 14 nov amistoso, dom 15 nov Noche
+  // de Leyendas, sáb 21 nov Tigres), solo para Ricky.
+  mexicoCityDateStr,
+  americaRickyReply,
 };
