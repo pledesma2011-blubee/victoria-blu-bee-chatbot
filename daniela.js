@@ -141,6 +141,17 @@ function loadState(phone) {
     vipCasualCount: 0, // respuestas casuales VIP dadas a Ricky (siempre contesta, 2026-11-11): rota las variantes para no sonar repetitiva
     known: false,
     handedOff: false,
+    // (Fase 2, memoria separada — condición 2 de Peter): la memoria
+    // distingue cuatro cosas, no una sola bolsa:
+    // - permanente: nombre, empresa, correo, trato (los campos de arriba).
+    // - contexto: resumen de lo ya hablado en esta conversación.
+    // - pendientes: intenciones/datos por completar (pendingNeed, need).
+    // - completadas: acciones ya ejecutadas en esta conversación.
+    context: '', // resumen corto de la conversación actual
+    completedActions: [], // ['demo_agendada', 'recado_enviado', ...]
+    updatedAt: null, // ISO de la última actualización (para vencimiento)
+    simulation: false, // modo simulación (Peter probando como prospecto)
+    ownerSnapshot: null, // foto del estado de dueño al entrar a simulación
   };
   let st;
   try {
@@ -169,11 +180,19 @@ function loadState(phone) {
 }
 
 function saveState(st) {
+  st.updatedAt = new Date().toISOString();
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(path.join(STATE_DIR, `${st.phone}.json`), JSON.stringify(st, null, 2));
 }
 
 function saveLead(lead) {
+  // (Fase 2, modo simulación): en simulación no se guarda ningún lead real.
+  if (lead && lead.telefono && sameNumber(lead.telefono, config.peterWhatsApp)) {
+    try {
+      const pst = loadState(lead.telefono);
+      if (pst && pst.simulation) { console.log('[SIMULACIÓN] lead NO guardado (simulación):', lead.tipo || 'recado'); return null; }
+    } catch { /* si no se puede leer el estado, se guarda normal */ }
+  }
   let leads = [];
   try {
     leads = JSON.parse(fs.readFileSync(LEADS_FILE, 'utf8'));
@@ -1073,6 +1092,9 @@ function contactBlock(st) {
 }
 
 async function notifyPeter(subject, body, st) {
+  // (Fase 2, modo simulación): en simulación no se manda ningún aviso real
+  // a Peter. Solo se registra, para que Peter vea qué se habría avisado.
+  if (st && st.simulation) { console.log('[SIMULACIÓN] aviso a Peter suprimido:', subject); return; }
   const fullBody = st ? `${body}${contactBlock(st)}` : body;
   // 1) WhatsApp al número personal de Peter
   try {
@@ -1626,12 +1648,46 @@ async function askBrainWithOpenAI(messages) {
 
 // Despachador: Groq (gratis) primero; OpenAI solo si no hay clave de Groq
 // o si Groq falla; null si no hay ninguna clave o ambas fallan.
+// (Fase 2, medición de Groq — condición 4 de Peter): consumo, velocidad y
+// disponibilidad del cerebro. Cada llamada registra latencia, proveedor y
+// éxito/fracaso. Si Groq falla, se intenta OpenAI (respaldo); si ambos
+// fallan, se devuelve null y el flujo anterior toma el control (nunca se
+// bloquea la conversación por un fallo del cerebro).
+const GROQ_METRICS = { total: 0, groqOk: 0, groqFail: 0, openaiOk: 0, openaiFail: 0, lastLatencyMs: null, lastError: null, lastOkAt: null };
+function groqMetrics() { return { ...GROQ_METRICS }; }
 async function askBrain(messages) {
+  const t0 = Date.now();
   if (config.groqApiKey) {
     const groq = await askBrainWithGroq(messages);
-    if (groq) return groq;
+    const ms = Date.now() - t0;
+    GROQ_METRICS.total += 1;
+    GROQ_METRICS.lastLatencyMs = ms;
+    if (groq) {
+      GROQ_METRICS.groqOk += 1;
+      GROQ_METRICS.lastOkAt = new Date().toISOString();
+      GROQ_METRICS.lastError = null;
+      console.log(`[GROQ] ok ${ms}ms modelo=${GROQ_CHAT_MODEL}`);
+      return groq;
+    }
+    GROQ_METRICS.groqFail += 1;
+    GROQ_METRICS.lastError = 'groq_sin_respuesta';
+    console.log(`[GROQ] fallo ${ms}ms (sin respuesta) -> respaldo OpenAI`);
   }
-  if (config.openaiApiKey) return askBrainWithOpenAI(messages);
+  if (config.openaiApiKey) {
+    const t1 = Date.now();
+    const openai = await askBrainWithOpenAI(messages);
+    const ms = Date.now() - t1;
+    if (openai) {
+      GROQ_METRICS.openaiOk += 1;
+      GROQ_METRICS.lastOkAt = new Date().toISOString();
+      GROQ_METRICS.lastError = null;
+      console.log(`[GROQ] respaldo OpenAI ok ${ms}ms`);
+      return openai;
+    }
+    GROQ_METRICS.openaiFail += 1;
+    GROQ_METRICS.lastError = 'openai_sin_respuesta';
+    console.log(`[GROQ] respaldo OpenAI fallo ${ms}ms -> sin cerebro`);
+  }
   return null;
 }
 
@@ -1891,6 +1947,28 @@ function timeReply() {
   return `${article} ${timeStr}, hora de la Ciudad de México. ¿En qué te puedo ayudar?`;
 }
 
+// ---------- identidad y sesión (Fase 2, Daniela AI) ----------
+// La identidad se resuelve POR NÚMERO, antes que cualquier etapa o
+// intención. Es la puerta de identidad del diagnóstico (causa raíz 1):
+// el dueño tiene prioridad absoluta sobre la clasificación de intención.
+// Que alguien escriba "soy Pedro" NO le da privilegios (prueba H);
+// solo el número autorizado es el dueño.
+function resolveIdentity(from) {
+  if (sameNumber(from, config.peterWhatsApp)) return 'owner';
+  if (isVipRicky(from)) return 'vip';
+  return 'prospect';
+}
+
+// Modo simulación (condición 1 de Peter, Fase 2): Peter prueba la
+// experiencia completa de un prospecto sin generar acciones, avisos ni
+// registros reales. Se activa con "modo simulación" y se sale con
+// "salir de simulación". Mientras está activo, Peter se atiende como
+// prospecto, pero los efectos reales (guardar lead, avisar a Peter,
+// guardar pregunta pendiente) se suprimen y solo se registran.
+function isSimulationMode(st) {
+  return st && st.simulation === true;
+}
+
 // ---------- el corazón: procesar un mensaje entrante ----------
 
 async function handleMessage(msg) {
@@ -1901,6 +1979,23 @@ async function handleMessage(msg) {
   if (st.stage === 'closed') {
     st.stage = 'main';
     saveState(st); // si no, el archivo queda en 'closed' aunque ya esté activa
+  }
+
+  // (Fase 2, vencimiento de etapa — conversación interrumpida, prueba E):
+  // una etapa comercial que lleva más de 24 horas sin actividad expira:
+  // la siguiente interacción empieza limpia, conservando solo los datos
+  // permanentes (nombre, empresa), no la intención pendiente. Sin esto,
+  // un prospecto que abandonó una conversación y regresa días después
+  // retomaba un flujo que ya no corresponde.
+  if (st.updatedAt && st.stage !== 'main' && st.stage !== 'new' && st.stage !== 'closed' && st.stage !== 'handed_off') {
+    const ageMs = Date.now() - new Date(st.updatedAt).getTime();
+    if (ageMs > 24 * 60 * 60 * 1000) {
+      console.log('[SESIÓN] etapa vencida para', from, ':', st.stage, '(inactiva', Math.round(ageMs / 3600000), 'h) -> main');
+      st.stage = 'main';
+      st.need = null;
+      st.pendingNeed = null;
+      saveState(st);
+    }
   }
 
   // Trato VIP — Ricky, socio de Peter (v3.4): Daniela siempre lo llama
@@ -1926,19 +2021,22 @@ async function handleMessage(msg) {
     saveState(st);
   }
 
-  // (v4.11): el dueño NUNCA queda atrapado en 'taking_message'.
-  // Caso real 2026-11-14: el bug de 'pedro_message' (v4.10) dejó el
-  // estado de Peter en 'taking_message', y su siguiente "Hola" corrió
-  // el flujo de extraño completo (aviso a él mismo, "ya le pasé su
-  // mensaje al área", resumen, voz y video de cierre). Si el dueño
-  // llega en 'taking_message', la etapa se regresa sola a 'main' y se
-  // le atiende como dueño. Solo 'taking_message': las demás etapas
-  // ('handed_off', captura de datos) se respetan, porque el comando
-  // "reiniciar daniela" es el que saca de 'handed_off' y el flujo de
-  // captura de contacto lo usa el propio Peter.
-  if (sameNumber(from, config.peterWhatsApp) && st.stage === 'taking_message') {
+  // (Fase 2, autocuración generalizada — v4.11 era solo 'taking_message'):
+  // el dueño NUNCA queda atrapado en una etapa COMERCIAL. Caso real
+  // 2026-11-14: el bug de 'pedro_message' (v4.10) dejó el estado de Peter
+  // en 'taking_message', y su siguiente "Hola" corrió el flujo de extraño
+  // completo (aviso a él mismo, "ya le pasé su mensaje al área", resumen,
+  // voz y video de cierre). La v4.11 solo limpiaba 'taking_message'; la
+  // Fase 2 generaliza: cualquier etapa de acción comercial (demo, reunión,
+  // precio, recado, video) se regresa sola a 'main' y se le atiende como
+  // dueño. Se RESPETAN 'handed_off' (solo "reiniciar daniela" lo saca) y
+  // la captura de contacto (awaiting_name_company, awaiting_contact,
+  // awaiting_address_pref), que el propio Peter usa al probar.
+  const OWNER_COMMERCIAL_STAGES = new Set(['taking_message', 'demo_capture', 'demo_when', 'meeting_capture', 'meeting_platform', 'meeting_when', 'inperson_capture', 'inperson_when', 'price_capture', 'awaiting_video_answer']);
+  if (sameNumber(from, config.peterWhatsApp) && !isSimulationMode(st) && OWNER_COMMERCIAL_STAGES.has(st.stage)) {
     st.stage = 'main';
     st.need = null;
+    st.pendingNeed = null;
     saveState(st);
   }
 
@@ -2028,6 +2126,55 @@ async function handleMessage(msg) {
       console.error('Error mandando el video de emojis a Ricky:', e.message);
       await wa.sendText(from, '¡Me encantan tus emojis, Ricky! ❤️');
     }
+    return;
+  }
+
+  // Modo simulación (Fase 2, condición 1 de Peter): Peter prueba la
+  // experiencia completa de un prospecto sin generar acciones, avisos ni
+  // registros reales. Entra con "modo simulación" y sale con "salir de
+  // simulación". Al entrar, se guarda una foto de su estado de dueño y se
+  // reinician los datos de prospecto; al salir, se restaura su estado de
+  // dueño intacto (aislamiento, condición 6). Solo responde al número
+  // personal de Peter.
+  const isSimEnter = /\bmodo simulaci[oó]n\b/.test(norm) || /\bsimular (prospecto|cliente)\b/.test(norm) || /\bprobar como (prospecto|cliente)\b/.test(norm);
+  const isSimExit = /\bsalir de simulaci[oó]n\b/.test(norm) || /\bmodo due[nñ]o\b/.test(norm) || /\bvolver a due[nñ]o\b/.test(norm) || /\bfin de simulaci[oó]n\b/.test(norm);
+  if (sameNumber(from, config.peterWhatsApp) && isSimEnter && !isSimulationMode(st)) {
+    st.ownerSnapshot = {
+      name: st.name, company: st.company, email: st.email || null,
+      contactPhone: st.contactPhone || null, contactPref: st.contactPref || null,
+      formality: st.formality, preferredName: st.preferredName,
+      stage: st.stage, need: st.need || null, handedOff: st.handedOff || false,
+    };
+    st.simulation = true;
+    st.name = null; st.company = null; st.email = null; st.contactPhone = null;
+    st.contactPref = null; st.preferredName = null; st.formality = 'usted';
+    st.stage = 'new'; st.need = null; st.handedOff = false;
+    saveState(st);
+    await wa.sendText(from, 'Listo, Pedro. Estás en modo simulación: a partir de ahora te atiendo como si fueras un prospecto, para que pruebes la experiencia completa. Nada de lo que pase aquí genera avisos, registros ni acciones reales. Para salir, escribe "salir de simulación".');
+    try {
+      await wa.sendVideo(from, config.media.welcomeVideo);
+    } catch (e) {
+      console.error('Error mandando el video de bienvenida (simulación):', e.message);
+    }
+    await wa.sendText(from, 'Hola, soy Daniela, la asistente de Blü Bee Technologies. Para atenderle como se merece, ¿me dice su nombre y de qué empresa nos escribe?');
+    st.stage = 'awaiting_name_company';
+    saveState(st);
+    return;
+  }
+  if (sameNumber(from, config.peterWhatsApp) && isSimExit && isSimulationMode(st)) {
+    const snap = st.ownerSnapshot || {};
+    st.simulation = false;
+    st.ownerSnapshot = null;
+    st.name = snap.name || 'Pedro';
+    st.company = snap.company || null;
+    st.email = snap.email || null;
+    st.contactPhone = snap.contactPhone || null;
+    st.contactPref = snap.contactPref || null;
+    st.formality = snap.formality || 'usted';
+    st.preferredName = snap.preferredName || 'Pedro';
+    st.stage = 'main'; st.need = null; st.handedOff = false;
+    saveState(st);
+    await wa.sendText(from, 'Listo, Pedro. Saliste del modo simulación y volviste a tu modo de dueño. Nada de la simulación quedó guardado como registro real. ¿En qué trabajamos hoy?');
     return;
   }
 
@@ -2550,6 +2697,18 @@ async function handleMessage(msg) {
 
   // --- Tomar un recado ---
   if (st.stage === 'taking_message') {
+    // (Fase 2, saludo no es recado): un saludo puro ("Hola", "buenos días")
+    // NUNCA es el contenido de un recado. Si llega un saludo con una etapa
+    // de recado pendiente, la etapa se neutraliza y el saludo se atiende
+    // como mensaje nuevo. Sin esto, un "Hola" se guardaba como recado y
+    // cerraba la conversación (caso real 2026-11-14 9:47, con el dueño;
+    // el mismo patrón aplica a prospectos).
+    if (!stripGreetingPrefix(norm)) {
+      st.stage = 'main';
+      st.need = null;
+      saveState(st);
+      return handleMainIntent(msg, st, text, norm);
+    }
     st.need = `Recado: ${text.length > 100 ? `${text.slice(0, 100)}…` : text}`;
     saveLead({
       tipo: 'recado',
@@ -2566,6 +2725,10 @@ async function handleMessage(msg) {
       `Nuevo recado de ${st.name || '(sin nombre)'} (${from}):\n"${text}"`,
       st
     );
+    // (Fase 2, memoria: acciones completadas) — el recado quedó registrado.
+    if (!Array.isArray(st.completedActions)) st.completedActions = [];
+    st.completedActions.push('recado_enviado');
+    saveState(st);
     await wa.sendText(from, 'Ya le pasé su mensaje al área correspondiente, le responden en cuanto puedan.');
     await closeChat(st);
     return;
@@ -2620,6 +2783,70 @@ function parseMeetingPlatform(norm) {
   return null;
 }
 
+// ---------- flujo del dueño (Fase 2, puerta de identidad) ----------
+// Dueño — Peter (el jefe): Daniela SIEMPRE le contesta a Peter, de
+// todo. Un saludo o mensaje de Peter nunca es "no es de Blü Bee" y
+// nunca se le notifica a él mismo como aviso. Se le responde directo,
+// como a su jefe. Esta función se llama ANTES que cualquier intención
+// o flujo comercial: la identidad del dueño tiene prioridad absoluta
+// sobre la clasificación de intención (causa raíz 1 del diagnóstico).
+// Caso real 2026-11-13: Peter le mandó una nota de voz ("Hola Daniela,
+// buenos días, ¿cómo estás?") y Daniela no le contestó, solo le mandó
+// a él mismo el aviso de "no es de Blü Bee" con el nombre mal extraído
+// ("Cómo Estás"). (v3.6): si tras el saludo hay una pregunta real,
+// Daniela NO responde solo con un saludo: si es pregunta de actividad
+// (mensajes/llamadas/clientes de hoy) la contesta con el reporte; si
+// no la sabe, le dice "Dame un segundo, lo reviso y te respondo en un
+// momento", guarda la pregunta para Tomás y Tomás la investiga.
+async function handleOwnerMessage(msg, st, text, norm) {
+  const from = st.phone;
+  const rest = stripGreetingPrefix(norm);
+  if (!rest) {
+    await wa.sendText(from, ownerGreetingReply());
+    saveState(st);
+    return;
+  }
+  if (looksLikeActivityQuestion(norm)) {
+    await wa.sendText(from, activityReportToday());
+    saveState(st);
+    return;
+  }
+  // v4.4: charla casual sobre Daniela ("¿qué haces?", "te pregunté
+  // qué haces") — NO es pregunta de negocio, no se investiga.
+  // Respuesta en primera persona, idea de Peter (2026-11-13): una
+  // inteligencia artificial que no descansa, 24 horas, 365 días,
+  // atendiendo a todos los clientes que contactan a Blü Bee.
+  if (isSmallTalkAboutDaniela(norm)) {
+    await wa.sendText(from, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?');
+    saveState(st);
+    return;
+  }
+  // v4.5: cerebro para charla y preguntas generales (orden de Peter
+  // 2026-11-13: profesionalizar, no parchear cada frase). Si el
+  // cerebro contesta algo útil, se manda; si dice "dame un segundo"
+  // (dato concreto que no sabe) o no contesta, flujo anterior.
+  // (v4.10): Peter pregunta cómo Daniela sabe que es Pedro o cómo
+  // sabe su nombre. Respuesta directa y coherente: lo reconoce por
+  // su número, es el dueño. Sin esto, la pregunta caía en
+  // 'pedro_message' y Daniela le pedía el mensaje para "la persona
+  // indicada", como si no lo conociera.
+  if (/como sabes (que )?(soy|me llamo|mi nombre es)|como sabes mi nombre|como supiste que soy|por que sabes que soy/.test(norm)) {
+    await wa.sendText(from, 'Porque tu número está registrado como el dueño de Blü Bee, Pedro. Yo te reconozco por tu número, por eso te saludo por tu nombre. ¿En qué te puedo ayudar?');
+    saveState(st);
+    return;
+  }
+  const brain = await brainReply(st, text);
+  if (brain && !/^dame un segundo/i.test(brain)) {
+    await wa.sendText(from, brain);
+    saveState(st);
+    return;
+  }
+  savePendingQuestion(from, text, 'pedro');
+  await wa.sendText(from, 'Dame un segundo, lo reviso y te respondo en un momento.');
+  saveState(st);
+  return;
+}
+
 async function handleMainIntent(msg, st, text, norm) {
   const from = st.phone;
   const display = contactDisplayName(st);
@@ -2635,6 +2862,21 @@ async function handleMainIntent(msg, st, text, norm) {
     await wa.sendText(from, vipWarmGreeting(st));
     saveState(st);
     return;
+  }
+
+  // (Fase 2, puerta de identidad): el dueño se atiende por su flujo propio
+  // ANTES que cualquier intención COMERCIAL. Sin esto, un mensaje de Peter
+  // con intención detectada (aunque fuera un falso positivo, como
+  // 'pedro_message' por contener la palabra "pedro") jamás llegaba al flujo
+  // del dueño (causa raíz 1, caso real 2026-11-14 9:39). Las intenciones
+  // comerciales (demo, reunión, precio, recado, vendedor, sector, faq,
+  // info) tratan al remitente como prospecto; para el dueño eso es un
+  // error. 'greeting' y 'farewell' NO se redirigen (sus casos del switch
+  // ya atienden bien al dueño), y sin intención se conserva el orden
+  // base de conocimiento -> fuera de tema -> dueño.
+  const OWNER_COMMERCIAL_INTENTS = new Set(['demo', 'meeting', 'price', 'pedro', 'pedro_message', 'vendor', 'sector', 'faq', 'info']);
+  if (sameNumber(from, config.peterWhatsApp) && !isSimulationMode(st) && intent && OWNER_COMMERCIAL_INTENTS.has(intent.kind)) {
+    return handleOwnerMessage(msg, st, text, norm);
   }
 
   // Base de conocimiento (v3): si no hay una intención clara, Daniela
@@ -2668,65 +2910,13 @@ async function handleMainIntent(msg, st, text, norm) {
       saveState(st);
       return;
     }
-    // Dueño — Peter (el jefe, orden 2026-11-13): Daniela SIEMPRE le
-    // contesta a Peter, de todo. Un saludo o mensaje de Peter nunca es
-    // "no es de Blü Bee" y nunca se le notifica a él mismo como aviso.
-    // Se le responde directo, como a su jefe. Caso real 2026-11-13: Peter
-    // le mandó una nota de voz ("Hola Daniela, buenos días, ¿cómo estás?")
-    // y Daniela no le contestó, solo le mandó a él mismo el aviso de
-    // "no es de Blü Bee" con el nombre mal extraído ("Cómo Estás").
-    // (v3.6, orden de Peter 2026-11-13): si tras el saludo hay una
-    // pregunta real, Daniela NO responde solo con un saludo: si es
-    // pregunta de actividad (mensajes/llamadas/clientes de hoy) la
-    // contesta con el reporte; si no la sabe, le dice "Dame un segundo,
-    // lo reviso y te respondo en un momento", guarda la pregunta para
-    // Tomás y Tomás la investiga y le da la respuesta.
-    if (sameNumber(from, config.peterWhatsApp)) {
-      const rest = stripGreetingPrefix(norm);
-      if (!rest) {
-        await wa.sendText(from, ownerGreetingReply());
-        saveState(st);
-        return;
-      }
-      if (looksLikeActivityQuestion(norm)) {
-        await wa.sendText(from, activityReportToday());
-        saveState(st);
-        return;
-      }
-      // v4.4: charla casual sobre Daniela ("¿qué haces?", "te pregunté
-      // qué haces") — NO es pregunta de negocio, no se investiga.
-      // Respuesta en primera persona, idea de Peter (2026-11-13): una
-      // inteligencia artificial que no descansa, 24 horas, 365 días,
-      // atendiendo a todos los clientes que contactan a Blü Bee.
-      if (isSmallTalkAboutDaniela(norm)) {
-        await wa.sendText(from, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?');
-        saveState(st);
-        return;
-      }
-      // v4.5: cerebro para charla y preguntas generales (orden de Peter
-      // 2026-11-13: profesionalizar, no parchear cada frase). Si el
-      // cerebro contesta algo útil, se manda; si dice "dame un segundo"
-      // (dato concreto que no sabe) o no contesta, flujo anterior.
-      // (v4.10): Peter pregunta cómo Daniela sabe que es Pedro o cómo
-      // sabe su nombre. Respuesta directa y coherente: lo reconoce por
-      // su número, es el dueño. Sin esto, la pregunta caía en
-      // 'pedro_message' y Daniela le pedía el mensaje para "la persona
-      // indicada", como si no lo conociera.
-      if (/como sabes (que )?(soy|me llamo|mi nombre es)|como sabes mi nombre|como supiste que soy|por que sabes que soy/.test(norm)) {
-        await wa.sendText(from, 'Porque tu número está registrado como el dueño de Blü Bee, Pedro. Yo te reconozco por tu número, por eso te saludo por tu nombre. ¿En qué te puedo ayudar?');
-        saveState(st);
-        return;
-      }
-      const brain = await brainReply(st, text);
-      if (brain && !/^dame un segundo/i.test(brain)) {
-        await wa.sendText(from, brain);
-        saveState(st);
-        return;
-      }
-      savePendingQuestion(from, text, 'pedro');
-      await wa.sendText(from, 'Dame un segundo, lo reviso y te respondo en un momento.');
-      saveState(st);
-      return;
+    // Dueño — Peter (el jefe): sin intención clara, tras la base de
+    // conocimiento y la redirección de fuera de tema, Daniela SIEMPRE le
+    // contesta a Peter, de todo (ver handleOwnerMessage). Este llamado
+    // conserva el orden v4.2 (la redirección profesional también aplica
+    // a Peter cuando pregunta fuera de tema).
+    if (sameNumber(from, config.peterWhatsApp) && !isSimulationMode(st)) {
+      return handleOwnerMessage(msg, st, text, norm);
     }
     // VIP Ricky (orden de Peter 2026-11-11): Daniela SIEMPRE le contesta
     // a Ricky. Un mensaje sin intención clara NO es "no es de Blü Bee"
@@ -3090,6 +3280,14 @@ async function handleMainIntent(msg, st, text, norm) {
 const PENDING_FILE = path.join(config.stateDir, 'preguntas-pendientes.json');
 
 function savePendingQuestion(from, text, who) {
+  // (Fase 2, modo simulación): en simulación no se guarda ninguna pregunta
+  // pendiente real. Solo se registra.
+  if (from && sameNumber(from, config.peterWhatsApp)) {
+    try {
+      const pst = loadState(from);
+      if (pst && pst.simulation) { console.log('[SIMULACIÓN] pregunta pendiente NO guardada (simulación):', text.slice(0, 60)); return null; }
+    } catch { /* si no se puede leer el estado, se guarda normal */ }
+  }
   let list = [];
   try {
     list = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8'));
@@ -3366,4 +3564,10 @@ module.exports = {
   // de Leyendas, sáb 21 nov Tigres), solo para Ricky.
   mexicoCityDateStr,
   americaRickyReply,
+  // Fase 2 (Daniela AI, 2026-11-14): puerta de identidad, modo simulación
+  // y medición de Groq.
+  resolveIdentity,
+  isSimulationMode,
+  handleOwnerMessage,
+  groqMetrics,
 };

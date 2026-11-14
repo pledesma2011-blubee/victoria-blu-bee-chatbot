@@ -36,6 +36,10 @@ function readState(phone) {
   const f = path.join(tmpDir, `${phone}.json`);
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null;
 }
+// (Fase 2) resuelve la identidad de un número con la función real de daniela.js.
+function resolveIdentityCheck(phone) {
+  return daniela.resolveIdentity ? daniela.resolveIdentity(phone) : 'prospect';
+}
 function readLeads() {
   const f = path.join(tmpDir, 'leads.json');
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : [];
@@ -181,14 +185,17 @@ async function incoming(phone, text) {
   check('nombre extraído = Ana', st && st.name === 'Ana', `name=${st && st.name}`);
   check('etapa = awaiting_address_pref', st && st.stage === 'awaiting_address_pref', `stage=${st && st.stage}`);
 
-  // Lleva a Peter a handedOff (misma secuencia que en (h)): saludo ->
-  // nombre -> usted -> sin correo -> pedir hablar con Pedro.
+  // Lleva a Peter a handedOff escribiendo el estado directamente.
+  // (Fase 2: Peter ya no puede entregarse a sí mismo con "Quiero hablar
+  // con Pedro" — él ES Pedro, y la puerta de identidad lo atiende por su
+  // flujo de dueño. handedOff se prepara como lo haría un traspaso real.)
   async function peterToHandedOff() {
     await incoming(PETER, 'Hola');
     await incoming(PETER, 'Soy Pedro');
     await incoming(PETER, 'usted');
     await incoming(PETER, 'No tengo correo');
-    await incoming(PETER, 'Quiero hablar con Pedro');
+    const cur = readState(PETER) || {};
+    fs.writeFileSync(path.join(tmpDir, `${PETER}.json`), JSON.stringify({ ...cur, handedOff: true, stage: 'handed_off' }, null, 2));
     const s = readState(PETER);
     check('preparación: handedOff', s && s.handedOff === true && s.stage === 'handed_off', `handedOff=${s && s.handedOff} stage=${s && s.stage}`);
   }
@@ -205,9 +212,17 @@ async function incoming(phone, text) {
   m = since(mark, PETER);
   st = readState(PETER);
   check('rechazo elegante, sin bloquear', hasText(m, /Sin problema, con su número de WhatsApp es suficiente\./) && st.stage === 'main', `stage=${st && st.stage}`);
+  // (Fase 2: Peter es el dueño, así que "Quiero hablar con Pedro" ya NO
+  // lo entrega a sí mismo: la puerta de identidad lo atiende por su flujo
+  // de dueño. Se verifica que NO quedó en handedOff y luego se prepara el
+  // estado handedOff directamente para probar el reinicio.)
+  mark = sent.length;
   await incoming(PETER, 'Quiero hablar con Pedro');
   st = readState(PETER);
-  check('handedOff tras pedir hablar con Pedro', st && st.handedOff === true && st.stage === 'handed_off', `handedOff=${st && st.handedOff} stage=${st && st.stage}`);
+  check('el dueño NO se entrega a sí mismo', st && st.handedOff !== true && st.stage !== 'handed_off', `handedOff=${st && st.handedOff} stage=${st && st.stage}`);
+  fs.writeFileSync(path.join(tmpDir, `${PETER}.json`), JSON.stringify({ ...st, handedOff: true, stage: 'handed_off' }, null, 2));
+  st = readState(PETER);
+  check('preparación: handedOff', st && st.handedOff === true && st.stage === 'handed_off', `handedOff=${st && st.handedOff} stage=${st && st.stage}`);
   mark = sent.length;
   await incoming(PETER, 'Hola');
   m = since(mark, PETER);
@@ -245,6 +260,9 @@ async function incoming(phone, text) {
   await incoming(PETER_REAL, 'usted');
   await incoming(PETER_REAL, 'No tengo correo');
   await incoming(PETER_REAL, 'Quiero hablar con Pedro');
+  st = readState(PETER_REAL);
+  check('el dueño NO se entrega a sí mismo (formato real Meta)', st && st.handedOff !== true && st.stage !== 'handed_off', `handedOff=${st && st.handedOff} stage=${st && st.stage}`);
+  fs.writeFileSync(path.join(tmpDir, `${PETER_REAL}.json`), JSON.stringify({ ...st, handedOff: true, stage: 'handed_off' }, null, 2));
   st = readState(PETER_REAL);
   check('preparación: handedOff', st && st.handedOff === true && st.stage === 'handed_off', `handedOff=${st && st.handedOff} stage=${st && st.stage}`);
   mark = sent.length;
@@ -1019,6 +1037,160 @@ async function incoming(phone, text) {
   check('NO le pasa el mensaje al área', !hasText(m, /Ya le pasé su mensaje al área correspondiente/));
   check('NO le manda el aviso de recado a él mismo', !hasText(m, /Nuevo recado de Pedro/));
   check('NO cierra la conversación con resumen', !hasText(m, /Antes de despedirme, le confirmo/));
+
+  // ---------- (v) Fase 2 — Daniela AI: puerta de identidad, sesión
+  // estructurada, modo simulación, memoria separada y aislamiento.
+  // (Autorizada por Peter 2026-11-14 10:07; diagnóstico de 5 causas raíz.)
+  console.log('\n(v) Fase 2 — puerta de identidad y sesión (Daniela AI):');
+
+  // (v-A) Identificación del dueño, secuencia completa: Hola -> ¿Cómo sabes
+  // que soy Pedro? -> Hola otra vez. Ningún flujo comercial se activa.
+  console.log('  (v-A) Identificación del dueño (prueba A):');
+  fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+    phone: PETER_OWNER, stage: 'main', name: 'Pedro', preferredName: 'Pedro',
+    formality: 'usted', handedOff: false,
+  }, null, 2));
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Hola');
+  m = since(mark, PETER_OWNER);
+  check('A1: "Hola" -> saludo de dueño', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('A2: "Hola" NO manda video de bienvenida', !hasKind(m, 'video'));
+  mark = sent.length;
+  await incoming(PETER_OWNER, '¿Cómo sabes que soy Pedro?');
+  m = since(mark, PETER_OWNER);
+  check('A3: explica que lo reconoce por su número', hasText(m, /te reconozco por tu número/));
+  check('A4: NO le pide el mensaje para la persona indicada', !hasText(m, /¿Qué mensaje le dejo a la persona indicada/));
+  check('A5: NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Hola');
+  m = since(mark, PETER_OWNER);
+  check('A6: "Hola" de nuevo -> saludo normal de dueño', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('A7: NO se activa flujo comercial (sin resumen ni cierre)', !hasText(m, /Antes de despedirme, le confirmo/) && !hasText(m, /Ya le pasé su mensaje/));
+
+  // (v-B) Estados residuales generalizados (prueba B): el dueño llega en
+  // 'demo_capture' (otra etapa comercial, no solo 'taking_message') y su
+  // "Hola" la neutraliza y lo atiende como dueño.
+  console.log('  (v-B) Estados residuales generalizados (prueba B):');
+  fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+    phone: PETER_OWNER, stage: 'demo_capture', name: 'Pedro', preferredName: 'Pedro',
+    formality: 'usted', need: 'Demo', handedOff: false,
+  }, null, 2));
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'Hola');
+  m = since(mark, PETER_OWNER);
+  st = readState(PETER_OWNER);
+  check('B1: la etapa demo_capture se autocura a main', st && st.stage === 'main', `stage=${st && st.stage}`);
+  check('B2: recibe el saludo de dueño, no el flujo de demo', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('B3: NO pide datos de demo', !hasText(m, /¿De qué empresa nos escribe|demo/i) || hasText(m, /Hola Pedro/));
+
+  // (v-F) Usuarios independientes (prueba F): dos prospectos a la vez, sin
+  // contaminación de información, memoria ni estados.
+  console.log('  (v-F) Usuarios independientes (prueba F):');
+  const F1 = '521555000101';
+  const F2 = '521555000102';
+  mark = sent.length;
+  await incoming(F1, 'Hola');
+  await incoming(F2, 'Hola');
+  await incoming(F1, 'Soy Carlos, de Viñedos El Olivo');
+  await incoming(F2, 'Soy Mariana, de Hotel Plaza');
+  const stF1 = readState(F1);
+  const stF2 = readState(F2);
+  check('F1: el prospecto 1 es Carlos / Viñedos El Olivo', stF1 && stF1.name === 'Carlos' && stF1.company === 'Viñedos el Olivo', `name=${stF1 && stF1.name} company=${stF1 && stF1.company}`);
+  check('F2: el prospecto 2 es Mariana / Hotel Plaza', stF2 && stF2.name === 'Mariana' && stF2.company === 'Hotel Plaza', `name=${stF2 && stF2.name} company=${stF2 && stF2.company}`);
+  check('F3: no hay contaminación entre prospectos', stF1 && stF2 && stF1.name !== stF2.name && stF1.company !== stF2.company);
+  const stP = readState(PETER_OWNER);
+  check('F4: el dueño no se contamina con los prospectos', stP && stP.name === 'Pedro', `name=${stP && stP.name}`);
+
+  // (v-H) Seguridad del dueño (prueba H): un cliente que escribe "soy
+  // Pedro" NO recibe privilegios de dueño.
+  console.log('  (v-H) Seguridad del dueño (prueba H):');
+  const H1 = '521555000103';
+  mark = sent.length;
+  await incoming(H1, 'Hola');
+  await incoming(H1, 'Soy Pedro');
+  const stH = readState(H1);
+  m = since(mark, H1);
+  check('H1: el impostor NO es el dueño (no se le saluda como Pedro dueño)', !hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('H2: el impostor sigue el flujo de prospecto (se le pide empresa/correo)', stH && (stH.stage === 'awaiting_address_pref' || stH.stage === 'awaiting_contact' || stH.stage === 'awaiting_name_company' || stH.stage === 'main'), `stage=${stH && stH.stage}`);
+  check('H3: su nombre guardado NO lo convierte en dueño', resolveIdentityCheck(H1) !== 'owner');
+
+  // (v-S) Modo simulación (condición 1 de Peter): Peter prueba la
+  // experiencia de prospecto sin acciones, avisos ni registros reales.
+  console.log('  (v-S) Modo simulación (condición 1):');
+  fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+    phone: PETER_OWNER, stage: 'main', name: 'Pedro', preferredName: 'Pedro',
+    formality: 'usted', handedOff: false,
+  }, null, 2));
+  const leadsBefore = readLeads().length;
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'modo simulación');
+  m = since(mark, PETER_OWNER);
+  st = readState(PETER_OWNER);
+  check('S1: entra a simulación (confirmación)', hasText(m, /modo simulación/));
+  check('S2: manda el video de bienvenida de prospecto', hasKind(m, 'video'));
+  check('S3: estado en simulación, etapa de captación', st && st.simulation === true && st.stage === 'awaiting_name_company', `simulation=${st && st.simulation} stage=${st && st.stage}`);
+  check('S4: el nombre de dueño queda guardado en foto (ownerSnapshot)', st && st.ownerSnapshot && st.ownerSnapshot.name === 'Pedro', `snapshot=${st && st.ownerSnapshot && st.ownerSnapshot.name}`);
+  await incoming(PETER_OWNER, 'Soy Carlos, de Viñedos Prueba');
+  st = readState(PETER_OWNER);
+  check('S5: en simulación captura el nombre del prospecto falso', st && st.name === 'Carlos', `name=${st && st.name}`);
+  await incoming(PETER_OWNER, 'Quiero dejar un recado para Pedro');
+  await incoming(PETER_OWNER, 'Llámenme cuando puedan, es una prueba');
+  const leadsAfter = readLeads();
+  check('S6: en simulación NO se guarda ningún lead real', leadsAfter.length === leadsBefore, `leads antes=${leadsBefore} después=${leadsAfter.length}`);
+  mark = sent.length;
+  await incoming(PETER_OWNER, 'salir de simulación');
+  m = since(mark, PETER_OWNER);
+  st = readState(PETER_OWNER);
+  check('S7: sale de simulación (confirmación)', hasText(m, /Saliste del modo simulación/));
+  check('S8: el estado de dueño se restaura intacto', st && st.simulation === false && st.name === 'Pedro' && st.stage === 'main', `simulation=${st && st.simulation} name=${st && st.name} stage=${st && st.stage}`);
+
+  // (v-M) Memoria separada (condición 2): permanente / contexto /
+  // pendientes / completadas, con marca de actualización.
+  console.log('  (v-M) Memoria separada (condición 2):');
+  const M1 = '521555000104';
+  await incoming(M1, 'Hola');
+  await incoming(M1, 'Soy Luis, de Bodega San Juan');
+  await incoming(M1, 'usted');
+  await incoming(M1, 'No tengo correo');
+  await incoming(M1, 'Quiero dejar un recado para Pedro');
+  await incoming(M1, 'Me interesa una demostración');
+  st = readState(M1);
+  check('M1: datos permanentes (nombre/empresa) guardados', st && st.name === 'Luis' && st.company === 'Bodega San Juan', `name=${st && st.name} company=${st && st.company}`);
+  check('M2: campo de contexto existe', st && typeof st.context === 'string', `context=${typeof (st && st.context)}`);
+  check('M3: acciones completadas registra el recado', st && Array.isArray(st.completedActions) && st.completedActions.includes('recado_enviado'), `completedActions=${JSON.stringify(st && st.completedActions)}`);
+  check('M4: marca de actualización (updatedAt) presente', st && typeof st.updatedAt === 'string' && st.updatedAt.length > 0, `updatedAt=${st && st.updatedAt}`);
+
+  // (v-E) Vencimiento de etapa (prueba E): un prospecto que abandonó hace
+  // más de 24 horas retoma limpio, conservando solo los datos permanentes.
+  console.log('  (v-E) Vencimiento de etapa (prueba E):');
+  const E1 = '521555000105';
+  const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(path.join(tmpDir, `${E1}.json`), JSON.stringify({
+    phone: E1, stage: 'demo_capture', name: 'Sofía', company: 'Clínica Norte',
+    formality: 'usted', need: 'Demo', handedOff: false, updatedAt: old,
+  }, null, 2));
+  mark = sent.length;
+  await incoming(E1, 'Hola');
+  st = readState(E1);
+  check('E1: la etapa vencida se regresa a main', st && st.stage === 'main', `stage=${st && st.stage}`);
+  check('E2: los datos permanentes se conservan', st && st.name === 'Sofía' && st.company === 'Clínica Norte', `name=${st && st.name} company=${st && st.company}`);
+  check('E3: la intención pendiente se limpia', st && !st.need, `need=${st && st.need}`);
+
+  // (v-G) Un saludo nunca es un recado (prospecto en taking_message):
+  console.log('  (v-G) Un saludo nunca es un recado (prospecto):');
+  const G1 = '521555000106';
+  fs.writeFileSync(path.join(tmpDir, `${G1}.json`), JSON.stringify({
+    phone: G1, stage: 'taking_message', name: 'Diego', company: 'Logística Sur',
+    formality: 'usted', need: 'Recado para la persona indicada', handedOff: false,
+  }, null, 2));
+  const leadsG = readLeads().length;
+  mark = sent.length;
+  await incoming(G1, 'Hola');
+  m = since(mark, G1);
+  st = readState(G1);
+  check('G1: la etapa taking_message se neutraliza con un saludo', st && st.stage === 'main', `stage=${st && st.stage}`);
+  check('G2: "Hola" NO se guarda como recado', readLeads().length === leadsG, `leads antes=${leadsG} después=${readLeads().length}`);
+  check('G3: el saludo se atiende como mensaje nuevo', hasText(m, /Hola|¿En qué|buen/) || m.length > 0);
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');

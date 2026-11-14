@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const wa = require('./whatsapp');
-const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion, confirmMeetingLead } = require('./daniela');
+const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion, confirmMeetingLead, groqMetrics } = require('./daniela');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -359,6 +359,10 @@ app.post('/deliver-meeting-confirm', async (req, res) => {
 
 // Salud del servidor
 app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: 'Blü Bee Technologies' }));
+
+// Métricas del cerebro (Fase 2, condición 4 de Peter): consumo, velocidad y
+// disponibilidad de Groq (llamadas, éxitos, fallos, última latencia).
+app.get('/metricas-groq', (req, res) => res.json({ ok: true, ...groqMetrics() }));
 
 app.listen(config.port, () => {
   console.log(`Daniela escuchando en el puerto ${config.port}`);
