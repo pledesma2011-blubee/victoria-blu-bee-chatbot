@@ -344,12 +344,22 @@ async function incoming(phone, text) {
   check('reconoce la necesidad y pide los datos', hasText(m, /Claro, con gusto te ayudo con eso\. Soy Daniela, la asistente virtual de Blü Bee\. Para atenderte mejor, ¿me compartes tu nombre y de qué empresa nos escribes\?/));
   check('la necesidad queda guardada (pendingNeed)', !!st && !!st.pendingNeed, `pendingNeed=${st && JSON.stringify(st.pendingNeed)}`);
 
-  // (j3) detectIntent directo: cada variante es 'greeting', y un saludo
-  // con necesidad NO es solo saludo.
+  // (j3) detectIntent directo: solo los saludos REALES son 'greeting'.
+  // (ACOTADO 2026-11-14, orden de Peter: "qué onda", "qué haces", "qué
+  // tal", "cómo estás", "disculpa" y "qué hay" son preguntas/aperturas,
+  // no saludos; se las tragaba la vía rápida y Daniela repetía el saludo.
+  // La sección (j) sigue pasando: un contacto NUEVO recibe el saludo por
+  // el flujo de primer mensaje, no por detectIntent.)
   console.log('\n(j3) detectIntent directo:');
-  for (const [greet] of GREET_VARIANTS) {
+  const REAL_GREETINGS = ['buenas tardes', 'buen día', 'Hola Daniela, buenos días, ¿cómo estás?'];
+  for (const greet of REAL_GREETINGS) {
     const intent = daniela.detectIntent(greet, greet.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[¡!¿?.,;:()"-]/g, ' ').replace(/\s+/g, ' ').trim());
     check(`"${greet}" -> greeting`, intent && intent.kind === 'greeting', `intent=${intent && intent.kind}`);
+  }
+  const NOT_GREETINGS = ['qué onda', 'qué haces', 'qué tal', 'cómo estás', 'disculpa', 'qué hay'];
+  for (const greet of NOT_GREETINGS) {
+    const intent = daniela.detectIntent(greet, greet.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[¡!¿?.,;:()"-]/g, ' ').replace(/\s+/g, ' ').trim());
+    check(`"${greet}" -> null (NO es saludo)`, intent === null, `intent=${intent && intent.kind}`);
   }
   const needIntent = daniela.detectIntent('hola Daniela, quiero que me ayudes en esto', 'hola daniela quiero que me ayudes en esto');
   check('"hola Daniela, quiero que me ayudes" NO es solo greeting', !needIntent || needIntent.kind !== 'greeting', `intent=${needIntent && needIntent.kind}`);
@@ -1516,6 +1526,79 @@ check('jsonValidoPct sobre prospectos (100%)', sumX.jsonValidoPct === 100, `json
 check('coincidePct sobre prospectos (2 de 3 = 66.7%)', sumX.coincidePct === 66.7, `coincidePct=${sumX.coincidePct}`);
 check('diferencias excluye simulación (solo a2)', sumX.diferencias.length === 1 && sumX.diferencias[0].id === 'a2', JSON.stringify(sumX.diferencias.map((e) => e.id)));
 check('ultimas excluye simulación (a1, a2, a3)', sumX.ultimas.length === 3 && sumX.ultimas.every((e) => e.identidad === 'prospect'), JSON.stringify(sumX.ultimas.map((e) => e.id)));
+
+// ---------- (x) Saludos acotados + guardia anti-repetición (2026-11-14)
+// Caso real: Peter dijo "Hola" y luego "Que haces?" dos veces, y las tres
+// veces Daniela contestó el mismo saludo. Causa: detectIntent trataba
+// "qué haces", "qué tal", "cómo estás", "qué onda", "disculpa" y "qué hay"
+// como saludos, y stripGreetingPrefix se comía la pregunta.
+console.log('\n(x) Saludos acotados y guardia anti-repetición:');
+
+// (x-1) detectIntent: solo saludos reales.
+console.log('  (x-1) detectIntent (saludos reales):');
+function normX(t) { return t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+check('"hola" -> greeting', daniela.detectIntent('hola', normX('hola'))?.kind === 'greeting');
+check('"buenos dias" -> greeting', daniela.detectIntent('buenos dias', normX('buenos dias'))?.kind === 'greeting');
+check('"buenas tardes" -> greeting', daniela.detectIntent('buenas tardes', normX('buenas tardes'))?.kind === 'greeting');
+check('"hola daniela" -> greeting', daniela.detectIntent('hola daniela', normX('hola daniela'))?.kind === 'greeting');
+check('"hola, ¿qué haces?" -> greeting (la pregunta la atiende el caso saludo)', daniela.detectIntent('hola, ¿qué haces?', normX('hola, ¿qué haces?'))?.kind === 'greeting');
+check('"que haces" -> null (NO es saludo)', daniela.detectIntent('que haces', normX('que haces')) === null);
+check('"que tal" -> null', daniela.detectIntent('que tal', normX('que tal')) === null);
+check('"como estas" -> null', daniela.detectIntent('como estas', normX('como estas')) === null);
+check('"que onda" -> null', daniela.detectIntent('que onda', normX('que onda')) === null);
+check('"disculpa" -> null', daniela.detectIntent('disculpa', normX('disculpa')) === null);
+check('"que hay" -> null', daniela.detectIntent('que hay', normX('que hay')) === null);
+
+// (x-2) stripGreetingPrefix NO cambió: su trabajo es quitar el ritual
+// de saludo tras un saludo real (k-f lo cubre). El arreglo es detectIntent
+// (x-1), no aquí. Se verifica que la pregunta real tras el saludo se
+// preserva y que el ritual se quita.
+console.log('  (x-2) stripGreetingPrefix (sin cambio, ritual vs pregunta):');
+check('"hola daniela que haces cual es el precio" -> "cual es el precio"', daniela.stripGreetingPrefix('hola daniela que haces cual es el precio') === 'cual es el precio');
+check('"hola daniela buenos dias como estas" -> "" (ritual)', daniela.stripGreetingPrefix('hola daniela buenos dias como estas') === '');
+check('"hola daniela" -> ""', daniela.stripGreetingPrefix('hola daniela') === '');
+
+// (x-3) Integración: el caso real de Peter (dueño).
+console.log('  (x-3) Caso real de Peter (dueño): Hola + Que haces? x2:');
+const realFetchX3 = global.fetch;
+const realGroqKeyX3 = config.groqApiKey;
+config.groqApiKey = 'test-fake-key';
+function mockBrainX3(content) {
+  global.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content } }] }) });
+}
+fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+  phone: PETER_OWNER, stage: 'main', name: 'Pedro', preferredName: 'Pedro',
+  formality: 'tu', handedOff: false,
+}, null, 2));
+mark = sent.length;
+await incoming(PETER_OWNER, 'Hola');
+m = since(mark, PETER_OWNER);
+check('"Hola" -> saludo del dueño', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)/));
+mark = sent.length;
+await incoming(PETER_OWNER, 'Que haces?');
+m = since(mark, PETER_OWNER);
+check('"Que haces?" -> respuesta en primera persona (NO el saludo)', hasText(m, /Estoy trabajando, Pedro/));
+check('"Que haces?" NO repite el saludo', !hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias/));
+// Segunda vez: el guardia pasa al cerebro para variar.
+mockBrainX3('¡Hola de nuevo, Pedro! Aquí sigo trabajando, atendiendo a los clientes de Blü Bee. ¿En qué te ayudo ahora?');
+mark = sent.length;
+await incoming(PETER_OWNER, 'Que haces?');
+m = since(mark, PETER_OWNER);
+check('"Que haces?" 2a vez -> el guardia varía con el cerebro', hasText(m, /¡Hola de nuevo, Pedro!/));
+check('"Que haces?" 2a vez NO repite "Estoy trabajando, Pedro"', !hasText(m, /Estoy trabajando, Pedro\. Soy una inteligencia artificial/));
+// (x-4) Anti-repetición del saludo: "Hola" dos veces seguidas.
+mockBrainX3('¡Hola, Pedro! Qué gusto saludarte de nuevo. ¿En qué trabajamos hoy?');
+mark = sent.length;
+await incoming(PETER_OWNER, 'Hola');
+m = since(mark, PETER_OWNER);
+check('"Hola" (x-4) -> saludo', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)/));
+mark = sent.length;
+await incoming(PETER_OWNER, 'Hola');
+m = since(mark, PETER_OWNER);
+check('"Hola" 2a vez -> el guardia varía con el cerebro', hasText(m, /¡Hola, Pedro! Qué gusto saludarte de nuevo/));
+check('"Hola" 2a vez NO repite el saludo fijo', !hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias/));
+global.fetch = realFetchX3;
+config.groqApiKey = realGroqKeyX3;
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');

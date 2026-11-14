@@ -139,6 +139,7 @@ function loadState(phone) {
     farewellPending: null, // { kind, name, file, requestedAt } si la despedida se hizo sin video (entrega diferida)
     vipGreetingCount: 0, // saludos cálidos VIP dados a Ricky (v3.4): cada 3, uno pregunta por Mila y Bruna
     vipCasualCount: 0, // respuestas casuales VIP dadas a Ricky (siempre contesta, 2026-11-11): rota las variantes para no sonar repetitiva
+    lastReplyText: null, // último texto que Daniela envió en esta conversación (guardia anti-repetición, 2026-11-14)
     known: false,
     handedOff: false,
     // (Fase 2, memoria separada — condición 2 de Peter): la memoria
@@ -2135,17 +2136,23 @@ function detectIntent(text, norm) {
     if (contains(text, [sector])) return { kind: 'sector', key: sector };
   }
   if (contains(text, ['informacion', 'info', 'soluciones', 'que hacen', 'que ofrece', 'servicios', 'iot', 'blu bee', 'blubee'])) return { kind: 'info' };
-  // Saludos (v3.6, orden de Peter 2026-11-13): Daniela entiende todas las
-  // formas de saludar como primer mensaje, no solo "hola": qué onda, qué
-  // haces, qué tal, cómo estás, disculpa, buen día, qué hay. Vale que el
-  // saludo venga al inicio aunque el mensaje sea más largo ("Hola Daniela,
-  // buenos días, ¿cómo estás?"), o que sea solo el saludo (<=3 palabras).
+  // Saludos (v3.6, orden de Peter 2026-11-13; ACOTADO 2026-11-14, orden
+  // de Peter): solo saludos reales (hola, buenas, buenos días/tardes/
+  // noches, buen día). Las aperturas que son preguntas ("qué haces",
+  // "qué tal", "cómo estás", "qué onda", "disculpa", "qué hay") NO son
+  // saludos: se las tragaba la vía rápida y Daniela contestaba el saludo
+  // una y otra vez (caso real 2026-11-14: Peter dijo "Que haces?" dos
+  // veces y recibió el mismo saludo tres veces). Ahora esas frases fluyen
+  // a su respuesta propia ("¿qué haces?" -> primera persona, v4.4) o al
+  // cerebro, que contesta con naturalidad. Vale que el saludo venga al
+  // inicio aunque el mensaje sea más largo ("Hola Daniela, buenos días,
+  // ¿cómo estás?"), o que sea solo el saludo (<=3 palabras).
   // PERO: si el mensaje además expresa una necesidad ("hola Daniela,
   // quiero que me ayudes en esto"), la necesidad manda y NO es solo
   // saludo, para no tragarse la pregunta.
   // Nota: norm ya viene sin acentos ni mayúsculas, por eso las frases van
   // sin acento.
-  const GREETING_PHRASES = ['hola', 'buenas', 'buenos dias', 'buenas tardes', 'buenas noches', 'buen dia', 'que onda', 'que haces', 'que tal', 'como estas', 'como estan', 'disculpa', 'que hay', 'hola que tal'];
+  const GREETING_PHRASES = ['hola', 'buenas', 'buenos dias', 'buenas tardes', 'buenas noches', 'buen dia', 'hola que tal'];
   if (GREETING_PHRASES.some((g) => norm.startsWith(g)) && !detectNeed(text)) return { kind: 'greeting' };
   if (contains(text, ['hola', 'buenas', 'buenos dias', 'buenas tardes', 'buenas noches']) && norm.split(' ').length <= 3) return { kind: 'greeting' };
   return null;
@@ -2311,6 +2318,28 @@ function greetingByTime() {
 // equivocada: con la hora correcta, Peter ya no tiene que cuestionarlo.
 function ownerGreetingReply() {
   return `Hola Pedro, ${greetingByTime()}. Muy bien, gracias. ¿En qué le puedo ayudar?`;
+}
+
+// Guardia anti-repetición (orden de Peter 2026-11-14): Daniela NUNCA
+// envía la misma respuesta dos veces seguidas. Si el texto que va a
+// enviar es idéntico al último que envió en esta conversación, pasa al
+// cerebro 120b para variar o aclarar. Si el cerebro no contesta, contesta
+// "dame un segundo" o devuelve lo mismo, se envía el texto original (no
+// se deja sin respuesta). Se usa en los saludos y las respuestas fijas,
+// que son las que se repiten textualmente. Actualiza lastReplyText y
+// guarda el estado.
+async function sendReply(from, st, text, userText) {
+  let out = text;
+  if (text && st.lastReplyText && text === st.lastReplyText) {
+    try {
+      const varied = await brainReply(st, userText || text);
+      if (varied && varied !== text && !/^dame un segundo/i.test(varied)) out = varied;
+    } catch { /* se envía el texto original */ }
+  }
+  await wa.sendText(from, out);
+  st.lastReplyText = out;
+  saveState(st);
+  return out;
 }
 
 // "¿Qué hora es?" (v4.9): pregunta por la hora actual. NO es "¿a qué hora
@@ -3181,6 +3210,20 @@ function parseMeetingPlatform(norm) {
 // momento", guarda la pregunta para Tomás y Tomás la investiga.
 async function handleOwnerMessage(msg, st, text, norm) {
   const from = st.phone;
+  // v4.4 (ORDEN: primero la charla, luego el saludo — 2026-11-14): la
+  // charla casual sobre Daniela ("¿qué haces?") se revisa ANTES de
+  // quitar el saludo, porque stripGreetingPrefix se come "¿qué haces?"
+  // como si fuera saludo y Daniela contestaba el saludo una y otra vez
+  // (caso real 2026-11-14: Peter dijo "Que haces?" dos veces y recibió
+  // el mismo saludo tres veces). Respuesta en primera persona, idea de
+  // Peter (2026-11-13): una inteligencia artificial que no descansa, 24
+  // horas, 365 días, atendiendo a todos los clientes que contactan a
+  // Blü Bee.
+  if (isSmallTalkAboutDaniela(norm)) {
+    await sendReply(from, st, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?', text);
+    saveState(st);
+    return;
+  }
   const rest = stripGreetingPrefix(norm);
   if (!rest) {
     await wa.sendText(from, ownerGreetingReply());
@@ -3189,16 +3232,6 @@ async function handleOwnerMessage(msg, st, text, norm) {
   }
   if (looksLikeActivityQuestion(norm)) {
     await wa.sendText(from, activityReportToday());
-    saveState(st);
-    return;
-  }
-  // v4.4: charla casual sobre Daniela ("¿qué haces?", "te pregunté
-  // qué haces") — NO es pregunta de negocio, no se investiga.
-  // Respuesta en primera persona, idea de Peter (2026-11-13): una
-  // inteligencia artificial que no descansa, 24 horas, 365 días,
-  // atendiendo a todos los clientes que contactan a Blü Bee.
-  if (isSmallTalkAboutDaniela(norm)) {
-    await wa.sendText(from, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?');
     saveState(st);
     return;
   }
@@ -3588,7 +3621,7 @@ async function handleMainIntent(msg, st, text, norm) {
             return;
           }
         }
-        await wa.sendText(from, vipWarmGreeting(st));
+        await sendReply(from, st, vipWarmGreeting(st), text);
         saveState(st);
         return;
       }
@@ -3603,7 +3636,7 @@ async function handleMainIntent(msg, st, text, norm) {
         if (rest) {
           // v4.4: "hola Daniela, ¿qué haces?" es charla, no pregunta.
           if (isSmallTalkAboutDaniela(norm)) {
-            await wa.sendText(from, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?');
+            await sendReply(from, st, 'Estoy trabajando, Pedro. Soy una inteligencia artificial y no descanso: estoy pendiente las 24 horas, los 365 días del año, atendiendo a todos los clientes que contactan a Blü Bee. ¿En qué te puedo ayudar?', text);
             saveState(st);
             return;
           }
@@ -3632,7 +3665,7 @@ async function handleMainIntent(msg, st, text, norm) {
           saveState(st);
           return;
         }
-        await wa.sendText(from, ownerGreetingReply());
+        await sendReply(from, st, ownerGreetingReply(), text);
         saveState(st);
         return;
       }
@@ -3647,12 +3680,12 @@ async function handleMainIntent(msg, st, text, norm) {
       // Daniela responde el saludo y enseguida pide nombre y correo para
       // dar trato especial y mandar más información.
       if (!greetName) {
-        await wa.sendText(from, 'Hola, mucho gusto. Soy Daniela, la asistente de Blü Bee Technologies. ¿Con quién tengo el gusto? ¿Me podrías dar tu nombre para darte un trato especial? ¿Me compartes tu correo para mandarte más información?');
+        await sendReply(from, st, 'Hola, mucho gusto. Soy Daniela, la asistente de Blü Bee Technologies. ¿Con quién tengo el gusto? ¿Me podrías dar tu nombre para darte un trato especial? ¿Me compartes tu correo para mandarte más información?', text);
         st.stage = 'awaiting_name_company';
         saveState(st);
         return;
       }
-      await wa.sendText(from, `Hola, ${greetName}, soy Daniela, la asistente de Blü Bee Technologies. ¿En qué ${leTe} puedo ayudar?`);
+      await sendReply(from, st, `Hola, ${greetName}, soy Daniela, la asistente de Blü Bee Technologies. ¿En qué ${leTe} puedo ayudar?`, text);
       return;
     }
   }
@@ -3912,6 +3945,7 @@ module.exports = {
   resolvePendingQuestion,
   stripGreetingPrefix,
   isSmallTalkAboutDaniela,
+  sendReply,
   looksLikeActivityQuestion,
   activityReportToday,
   // Nota de voz con ruido de fondo (v4.7, orden de Peter 2026-11-13):
