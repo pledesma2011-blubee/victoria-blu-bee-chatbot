@@ -1192,6 +1192,309 @@ async function incoming(phone, text) {
   check('G2: "Hola" NO se guarda como recado', readLeads().length === leadsG, `leads antes=${leadsG} después=${readLeads().length}`);
   check('G3: el saludo se atiende como mensaje nuevo', hasText(m, /Hola|¿En qué|buen/) || m.length > 0);
 
+// ---------- (w) Fase 3a — GROQ como intérprete: intérprete 20b, modo
+// sombra, interruptor, presupuesto TPM y validación de salida.
+// (Autorizada por Peter 2026-11-14 10:46, con 5 ajustes + 3 condiciones.)
+console.log('\n(w) Fase 3a — intérprete Groq 20b y modo sombra:');
+
+// (w-1) Validación de salida del intérprete (ajuste 5): JSON inválido o
+// intención fuera de taxonomía se trata como "desconocida".
+console.log('  (w-1) parseInterpretResult (validación de salida):');
+check('JSON válido con intención en taxonomía', (() => {
+  const r = daniela.parseInterpretResult('{"intencion":"demo","confianza":0.95,"tema":null}');
+  return r.intencion === 'demo' && r.confianza === 0.95 && r.jsonValido === true && r.error === null;
+})());
+check('JSON válido envuelto en ```json```', (() => {
+  const r = daniela.parseInterpretResult('```json\n{"intencion":"precio","confianza":0.8,"tema":null}\n```');
+  return r.intencion === 'precio' && r.jsonValido === true;
+})());
+check('JSON inválido -> desconocida', (() => {
+  const r = daniela.parseInterpretResult('esto no es json');
+  return r.intencion === 'desconocida' && r.jsonValido === false && r.error === 'json_invalido';
+})());
+check('intención fuera de taxonomía -> desconocida', (() => {
+  const r = daniela.parseInterpretResult('{"intencion":"comprar_zapatos","confianza":0.9,"tema":null}');
+  return r.intencion === 'desconocida' && r.jsonValido === false && r.error === 'intencion_fuera_de_taxonomia';
+})());
+check('respuesta vacía -> desconocida', (() => {
+  const r = daniela.parseInterpretResult('');
+  return r.intencion === 'desconocida' && r.jsonValido === false;
+})());
+check('confianza fuera de rango se limita a 0-1', (() => {
+  const r = daniela.parseInterpretResult('{"intencion":"demo","confianza":1.7,"tema":null}');
+  return r.confianza === 1 && r.jsonValido === true;
+})());
+
+// (w-2) Interruptor de apagado (ajuste 3): GROQ_INTERPRETE=off vuelve a v5.1.
+console.log('  (w-2) groqInterpretMode (interruptor):');
+const realModeEnv = process.env.GROQ_INTERPRETE;
+delete process.env.GROQ_INTERPRETE;
+check('sin variable -> sombra (por defecto)', daniela.groqInterpretMode() === 'sombra');
+process.env.GROQ_INTERPRETE = 'off';
+check('GROQ_INTERPRETE=off -> off', daniela.groqInterpretMode() === 'off');
+process.env.GROQ_INTERPRETE = 'activo';
+check('GROQ_INTERPRETE=activo -> sombra (aún no habilitado)', daniela.groqInterpretMode() === 'sombra');
+process.env.GROQ_INTERPRETE = 'cualquier-cosa';
+check('valor inválido -> sombra', daniela.groqInterpretMode() === 'sombra');
+if (realModeEnv === undefined) delete process.env.GROQ_INTERPRETE;
+else process.env.GROQ_INTERPRETE = realModeEnv;
+
+// (w-3) Presupuesto TPM (ajuste 1): 8,000 TPM por modelo, con margen.
+console.log('  (w-3) Presupuesto TPM:');
+daniela.groqTokenReset();
+check('ventana vacía: se puede gastar 600 tokens (20b)', daniela.groqTokenCanSpend('openai/gpt-oss-20b', 600));
+check('ventana vacía: se puede gastar 2650 tokens (120b)', daniela.groqTokenCanSpend('openai/gpt-oss-120b', 2650));
+daniela.groqTokenRecord('openai/gpt-oss-20b', 7000);
+check('20b con 7000 usados: 600 más NO cabe (7000+600 > 7500)', !daniela.groqTokenCanSpend('openai/gpt-oss-20b', 600));
+check('120b no se afecta por el gasto del 20b (límites por modelo)', daniela.groqTokenCanSpend('openai/gpt-oss-120b', 2650));
+daniela.groqTokenRecord('openai/gpt-oss-120b', 5000);
+check('120b con 5000 usados: 2650 más NO cabe (5000+2650 > 7500)', !daniela.groqTokenCanSpend('openai/gpt-oss-120b', 2650));
+check('presupuesto reporta ambos modelos', (() => {
+  const b = daniela.groqTokenBudget();
+  return b['openai/gpt-oss-20b'] && b['openai/gpt-oss-120b'] && b['openai/gpt-oss-20b'].limite === 8000;
+})());
+daniela.groqTokenReset();
+
+// (w-4) interpretWithGroq con fetch simulado (sin red real).
+console.log('  (w-4) interpretWithGroq (fetch simulado):');
+const realFetchI = global.fetch;
+const realGroqKeyI = config.groqApiKey;
+config.groqApiKey = 'test-fake-key';
+function mockInterpret(content, usage) {
+  global.fetch = async (url, opts) => {
+    // El intérprete llama a Groq con el modelo 20b, temperatura 0 y JSON.
+    const body = JSON.parse(opts.body || '{}');
+    if (body.model !== 'openai/gpt-oss-20b') throw new Error('modelo incorrecto: ' + body.model);
+    if (body.temperature !== 0) throw new Error('temperatura debe ser 0');
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content } }],
+        usage: usage || { prompt_tokens: 450, completion_tokens: 60, total_tokens: 510 },
+      }),
+    };
+  };
+}
+function mockInterpretHttp(status) {
+  global.fetch = async () => ({ ok: false, status, text: async () => 'rate limit' });
+}
+function mockInterpretFail() {
+  global.fetch = async () => { throw new Error('red caída'); };
+}
+function mockInterpretSlow() {
+  global.fetch = async () => new Promise(() => {}); // nunca resuelve
+}
+daniela.groqTokenReset();
+mockInterpret('{"intencion":"demo","confianza":0.95,"tema":null}');
+let ri = await daniela.interpretWithGroq('Quiero agendar una demostración');
+check('JSON válido -> intención demo, confianza 0.95', ri.intencion === 'demo' && ri.confianza === 0.95 && ri.jsonValido === true, JSON.stringify(ri));
+check('modelo es openai/gpt-oss-20b', ri.modelo === 'openai/gpt-oss-20b');
+check('tokens registrados (450+60=510)', ri.tokensTotal === 510 && ri.tokensEntrada === 450 && ri.tokensSalida === 60, `tokens=${ri.tokensTotal}`);
+check('latencia registrada', typeof ri.latenciaMs === 'number' && ri.latenciaMs >= 0);
+mockInterpret('esto no es json');
+ri = await daniela.interpretWithGroq('bla bla');
+check('JSON inválido -> desconocida, jsonValido false', ri.intencion === 'desconocida' && ri.jsonValido === false && ri.error === 'json_invalido');
+mockInterpret('{"intencion":"otra_cosa","confianza":0.9,"tema":null}');
+ri = await daniela.interpretWithGroq('bla bla');
+check('intención fuera de taxonomía -> desconocida', ri.intencion === 'desconocida' && ri.jsonValido === false && ri.error === 'intencion_fuera_de_taxonomia');
+mockInterpretHttp(429);
+ri = await daniela.interpretWithGroq('Quiero una demo');
+check('HTTP 429 -> error http_429, desconocida', ri.intencion === 'desconocida' && ri.error === 'http_429', `error=${ri.error}`);
+mockInterpretFail();
+ri = await daniela.interpretWithGroq('Quiero una demo');
+check('red caída -> error, desconocida, no se cae', ri.intencion === 'desconocida' && ri.error === 'red caída', `error=${ri.error}`);
+mockInterpretSlow();
+ri = await daniela.interpretWithGroq('Quiero una demo', { timeoutMs: 50 });
+check('timeout 50ms -> error timeout (ajuste 4)', ri.error === 'timeout' && ri.intencion === 'desconocida', `error=${ri.error} latencia=${ri.latenciaMs}`);
+// Sin clave: no se llama a Groq.
+config.groqApiKey = '';
+global.fetch = async () => { throw new Error('NO se debe llamar a fetch sin clave'); };
+ri = await daniela.interpretWithGroq('Quiero una demo');
+check('sin clave -> error sin_clave, sin llamar a Groq', ri.error === 'sin_clave' && ri.intencion === 'desconocida');
+config.groqApiKey = 'test-fake-key';
+// Presupuesto agotado: no se llama a Groq.
+daniela.groqTokenReset();
+daniela.groqTokenRecord('openai/gpt-oss-20b', 7500);
+global.fetch = async () => { throw new Error('NO se debe llamar a fetch con presupuesto agotado'); };
+ri = await daniela.interpretWithGroq('Quiero una demo');
+check('presupuesto TPM agotado -> error, sin llamar a Groq', ri.error === 'presupuesto_tpm_agotado' && ri.intencion === 'desconocida');
+daniela.groqTokenReset();
+global.fetch = realFetchI;
+config.groqApiKey = realGroqKeyI;
+
+// (w-5) Coincidencia sombra: Groq vs detectIntent por categoría comercial.
+console.log('  (w-5) shadowIntentsMatch (comparación):');
+check('demo/demo coincide', daniela.shadowIntentsMatch('demo', 'demo', 'quiero una demo'));
+check('reunion/meeting coincide', daniela.shadowIntentsMatch('reunion', 'meeting', 'quiero agendar una reunion'));
+check('precio/price coincide', daniela.shadowIntentsMatch('precio', 'price', 'cuanto cuesta'));
+check('sector/sector coincide', daniela.shadowIntentsMatch('sector', 'sector', 'tengo un hotel'));
+check('recado_dueno/pedro_message coincide', daniela.shadowIntentsMatch('recado_dueno', 'pedro_message', 'quiero dejar un mensaje para pedro'));
+check('vendedor/vendor coincide', daniela.shadowIntentsMatch('vendedor', 'vendor', 'les vendo un servicio'));
+check('info_general/info coincide', daniela.shadowIntentsMatch('info_general', 'info', 'que hacen'));
+check('como_funciona/faq coincide', daniela.shadowIntentsMatch('como_funciona', 'faq', 'que es iot'));
+check('desconocida/null coincide (ambos sin intención)', daniela.shadowIntentsMatch('desconocida', null, 'asdfgh'));
+check('demo/price NO coincide', !daniela.shadowIntentsMatch('demo', 'price', 'cuanto cuesta'));
+check('info_general/null NO coincide (Groq encontró lo que keywords no)', !daniela.shadowIntentsMatch('info_general', null, 'a que se dedican'));
+check('fuera_de_tema + fútbol coincide con null', daniela.shadowIntentsMatch('fuera_de_tema', null, 'cuando juega el america'));
+check('fuera_de_tema + negocio NO coincide', !daniela.shadowIntentsMatch('fuera_de_tema', null, 'quiero una demo'));
+
+// (w-6) Modo sombra en vivo (integración): la respuesta al prospecto NO
+// cambia (sigue el camino de palabras clave) y la llamada a Groq queda
+// registrada en segundo plano.
+console.log('  (w-6) Modo sombra en vivo (respuesta sin cambios):');
+const realFetchS = global.fetch;
+const realGroqKeyS = config.groqApiKey;
+config.groqApiKey = 'test-fake-key';
+delete process.env.GROQ_INTERPRETE; // modo sombra (por defecto)
+daniela.groqTokenReset();
+const SH = '521555000200';
+function resetShadowState() {
+  fs.writeFileSync(path.join(tmpDir, `${SH}.json`), JSON.stringify({
+    phone: SH, stage: 'main', name: 'Carlos', company: 'Viñedos El Olivo',
+    preferredName: 'Carlos', formality: 'usted', handedOff: false,
+  }, null, 2));
+}
+function shadowLog() { return daniela.readShadowLog(); }
+mockInterpret('{"intencion":"demo","confianza":0.95,"tema":null}');
+resetShadowState();
+const shadowBefore = shadowLog().length;
+mark = sent.length;
+await incoming(SH, 'Quiero agendar una demostración');
+m = since(mark, SH);
+check('la respuesta es la del flujo de demo (palabras clave, sin cambios)', hasText(m, /¡Perfecto! La demostración es gratuita\. ¿Qué día y hora le conviene\?/));
+await new Promise((r) => setTimeout(r, 150)); // la sombra corre en segundo plano
+const entries = shadowLog();
+const last = entries[entries.length - 1];
+check('la sombra registró la llamada', entries.length === shadowBefore + 1, `antes=${shadowBefore} después=${entries.length}`);
+check('sombra: keyword=demo, groq=demo, coincide', last && last.keyword === 'demo' && last.groq === 'demo' && last.coincide === true, JSON.stringify(last));
+check('sombra: modelo 20b, JSON válido, tokens y latencia', last && last.modelo === 'openai/gpt-oss-20b' && last.jsonValido === true && last.tokensTotal === 510 && typeof last.latenciaMs === 'number', JSON.stringify(last));
+check('sombra: identidad prospecto', last && last.identidad === 'prospect');
+// Vía rápida: un saludo NO genera llamada a la sombra.
+mockInterpret('{"intencion":"charla","confianza":0.9,"tema":null}');
+resetShadowState();
+const shadowBefore2 = shadowLog().length;
+mark = sent.length;
+await incoming(SH, 'Hola');
+await new Promise((r) => setTimeout(r, 150));
+check('saludo NO genera entrada de sombra (vía rápida)', shadowLog().length === shadowBefore2, `antes=${shadowBefore2} después=${shadowLog().length}`);
+// Interruptor: con GROQ_INTERPRETE=off no hay sombra ni llamada a Groq.
+process.env.GROQ_INTERPRETE = 'off';
+global.fetch = async () => { throw new Error('NO se debe llamar a Groq con el interruptor off'); };
+resetShadowState();
+const shadowBefore3 = shadowLog().length;
+mark = sent.length;
+await incoming(SH, 'Quiero agendar una demostración');
+await new Promise((r) => setTimeout(r, 150));
+check('interruptor off: NO hay entrada de sombra', shadowLog().length === shadowBefore3, `antes=${shadowBefore3} después=${shadowLog().length}`);
+check('interruptor off: la respuesta sigue siendo la de demo', hasText(since(mark, SH), /¡Perfecto! La demostración es gratuita/));
+delete process.env.GROQ_INTERPRETE;
+// Fallo de Groq en sombra: la respuesta llega igual y queda el error registrado.
+config.groqApiKey = 'test-fake-key';
+mockInterpretFail();
+resetShadowState();
+const shadowBefore4 = shadowLog().length;
+mark = sent.length;
+await incoming(SH, 'Quiero agendar una demostración');
+m = since(mark, SH);
+check('Groq caído: la respuesta llega igual (respaldo keywords)', hasText(m, /¡Perfecto! La demostración es gratuita/));
+await new Promise((r) => setTimeout(r, 150));
+const lastFail = shadowLog()[shadowLog().length - 1];
+check('Groq caído: queda registrado el error en la sombra', shadowLog().length === shadowBefore4 + 1 && lastFail && lastFail.error === 'red caída' && lastFail.jsonValido === false, JSON.stringify(lastFail));
+global.fetch = realFetchS;
+config.groqApiKey = realGroqKeyS;
+daniela.groqTokenReset();
+
+// (w-6b) Exclusión de sombra (orden de Peter 2026-11-14): solo prospectos.
+// El dueño y el VIP Ricky NO entran; Peter en simulación SÍ (como prospecto).
+console.log('  (w-6b) Exclusión de sombra (solo prospectos):');
+const realFetchX = global.fetch;
+const realGroqKeyX = config.groqApiKey;
+config.groqApiKey = 'test-fake-key';
+delete process.env.GROQ_INTERPRETE; // modo sombra
+daniela.groqTokenReset();
+mockInterpret('{"intencion":"demo","confianza":0.95,"tema":null}');
+// Dueño: mensaje comercial NO entra a la sombra.
+fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+  phone: PETER_OWNER, stage: 'main', name: 'Pedro', preferredName: 'Pedro',
+  formality: 'tu', handedOff: false,
+}, null, 2));
+const shOwnerBefore = daniela.readShadowLog().length;
+mark = sent.length;
+await incoming(PETER_OWNER, 'Quiero agendar una demostración');
+await new Promise((r) => setTimeout(r, 150));
+check('dueño: mensaje comercial NO entra a la sombra', daniela.readShadowLog().length === shOwnerBefore, `antes=${shOwnerBefore} después=${daniela.readShadowLog().length}`);
+// Ricky: mensaje comercial NO entra a la sombra.
+fs.writeFileSync(path.join(tmpDir, `${RICKY_OWNER}.json`), JSON.stringify({
+  phone: RICKY_OWNER, stage: 'main', name: 'Ricky', preferredName: 'Ricky',
+  formality: 'tu', handedOff: false,
+}, null, 2));
+const shRickyBefore = daniela.readShadowLog().length;
+mark = sent.length;
+await incoming(RICKY_OWNER, 'Quiero agendar una demostración');
+await new Promise((r) => setTimeout(r, 150));
+check('Ricky: mensaje comercial NO entra a la sombra', daniela.readShadowLog().length === shRickyBefore, `antes=${shRickyBefore} después=${daniela.readShadowLog().length}`);
+// Peter en modo simulación: SÍ entra (como prospecto, identidad 'simulacion').
+fs.writeFileSync(path.join(tmpDir, `${PETER_OWNER}.json`), JSON.stringify({
+  phone: PETER_OWNER, stage: 'main', name: 'Pedro', preferredName: 'Pedro',
+  formality: 'tu', handedOff: false, simulation: true,
+}, null, 2));
+const shSimBefore = daniela.readShadowLog().length;
+mark = sent.length;
+await incoming(PETER_OWNER, 'Quiero agendar una demostración');
+await new Promise((r) => setTimeout(r, 150));
+const lastSim = daniela.readShadowLog()[daniela.readShadowLog().length - 1];
+check('Peter en simulación SÍ entra a la sombra (identidad simulacion)', daniela.readShadowLog().length === shSimBefore + 1 && lastSim && lastSim.identidad === 'simulacion', JSON.stringify(lastSim));
+global.fetch = realFetchX;
+config.groqApiKey = realGroqKeyX;
+daniela.groqTokenReset();
+
+// (w-7) Prueba C: las 7 preguntas de propuesta de valor convergen a la
+// misma intención en el intérprete (mock: Groq devuelve info_general).
+console.log('  (w-7) Prueba C (misma intención, distintas frases):');
+const realFetchC = global.fetch;
+const realGroqKeyC = config.groqApiKey;
+config.groqApiKey = 'test-fake-key';
+daniela.groqTokenReset();
+const FRASES_C = [
+  '¿Qué hace BLÜ BEE?',
+  '¿A qué se dedican?',
+  '¿Cómo funciona su tecnología?',
+  '¿Qué soluciones ofrecen?',
+  '¿Para qué me puede servir?',
+  '¿Cómo podrían ayudar a mi empresa?',
+  '¿Qué beneficios tendría implementar esto?',
+];
+let converge = true;
+for (const f of FRASES_C) {
+  mockInterpret('{"intencion":"info_general","confianza":0.92,"tema":"propuesta_valor"}');
+  const r = await daniela.interpretWithGroq(f);
+  if (r.intencion !== 'info_general' || !r.jsonValido) converge = false;
+  // Se documenta la brecha con keywords (lo que medirá el modo sombra en vivo).
+  const kw = daniela.detectIntent(f, f.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  console.log(`    "${f}" -> Groq: info_general | keywords: ${kw ? kw.kind : 'null'}`);
+}
+check('las 7 frases convergen a info_general en el intérprete', converge);
+global.fetch = realFetchC;
+config.groqApiKey = realGroqKeyC;
+daniela.groqTokenReset();
+
+// (w-8) Resumen de sombra: totales, % JSON válido, % coincidencia y por umbral.
+console.log('  (w-8) shadowSummary:');
+const sum = daniela.shadowSummary();
+check('resumen: modo sombra, modelo 20b', sum.modo === 'sombra' && sum.modelo === 'openai/gpt-oss-20b', JSON.stringify({ modo: sum.modo, modelo: sum.modelo }));
+check('resumen: total > 0 y jsonValidoPct es número', sum.total > 0 && typeof sum.jsonValidoPct === 'number', `total=${sum.total} jsonValidoPct=${sum.jsonValidoPct}`);
+check('resumen: coincidePct es número', typeof sum.coincidePct === 'number', `coincidePct=${sum.coincidePct}`);
+check('resumen: porUmbral tiene 0.6/0.7/0.8/0.9', sum.porUmbral && sum.porUmbral['>=0.6'] && sum.porUmbral['>=0.9'], JSON.stringify(sum.porUmbral));
+check('resumen: diferencias y últimas son listas', Array.isArray(sum.diferencias) && Array.isArray(sum.ultimas));
+
+// (w-9) El cerebro 120b conserva su timeout de 8 s (ajuste 4) y el modelo fijo.
+console.log('  (w-9) Cerebro 120b (timeout 8 s, modelo fijo):');
+check('modelo del cerebro sigue siendo openai/gpt-oss-120b', daniela.GROQ_CHAT_MODEL === 'openai/gpt-oss-120b');
+check('timeout del cerebro es 8000 ms', daniela.GROQ_BRAIN_TIMEOUT_MS === 8000);
+check('timeout del intérprete es 4000 ms', daniela.GROQ_INTERPRET_TIMEOUT_MS === 4000);
+check('umbral de confianza es 0.6 (a calibrar con sombra)', daniela.GROQ_CONFIDENCE_THRESHOLD === 0.6);
+
+
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
   console.log('\n(verificación global):');

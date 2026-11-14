@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const wa = require('./whatsapp');
-const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion, confirmMeetingLead, groqMetrics } = require('./daniela');
+const { handleMessage, deliverPendingFarewell, readPendingQuestions, resolvePendingQuestion, confirmMeetingLead, groqMetrics, shadowSummary } = require('./daniela');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -362,7 +362,21 @@ app.get('/health', (req, res) => res.json({ ok: true, bot: 'Daniela', empresa: '
 
 // Métricas del cerebro (Fase 2, condición 4 de Peter): consumo, velocidad y
 // disponibilidad de Groq (llamadas, éxitos, fallos, última latencia).
+// (Fase 3a): incluye el modo del intérprete, sus métricas y el presupuesto TPM.
 app.get('/metricas-groq', (req, res) => res.json({ ok: true, ...groqMetrics() }));
+
+// Métricas del modo sombra (Fase 3a, ajuste 2 de Peter): cuántas llamadas
+// hizo el intérprete, % de JSON válido, % de coincidencia con detectIntent
+// (global y por umbral de confianza, para calibrar el umbral 0.6), y los
+// casos donde difieren. Es el reporte para decidir cuándo activar el intérprete.
+app.get('/metricas-sombra', (req, res) => {
+  try {
+    return res.json({ ok: true, ...shadowSummary() });
+  } catch (e) {
+    console.error('Error en /metricas-sombra:', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 app.listen(config.port, () => {
   console.log(`Daniela escuchando en el puerto ${config.port}`);

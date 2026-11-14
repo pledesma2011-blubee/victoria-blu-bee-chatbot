@@ -1605,12 +1605,33 @@ function brainSystemPrompt(st) {
   ].join('\n');
 }
 
+// fetch con timeout (Fase 3a): el intérprete usa 4 s y el cerebro 8 s
+// (orden de Peter). Sin esto, una llamada lenta a Groq dejaría esperando
+// al prospecto. Se usa Promise.race (no solo AbortController) para que el
+// timeout también funcione cuando fetch está simulado en pruebas.
+async function fetchWithTimeout(url, options, timeoutMs) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+  });
+  try {
+    return await Promise.race([fetch(url, options), timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Llama al cerebro contra un endpoint compatible con OpenAI Chat.
 // Devuelve el texto de la respuesta o null si falla.
-async function askBrainWithProvider(endpoint, model, key, messages) {
+// (Fase 3a): timeoutMs opcional (el cerebro Groq usa 8 s); los tokens de
+// la respuesta se registran en el presupuesto TPM (ver groqTokenRecord).
+async function askBrainWithProvider(endpoint, model, key, messages, timeoutMs) {
   if (!key) return null;
   try {
-    const res = await fetch(endpoint, {
+    const fetchFn = (timeoutMs && timeoutMs > 0)
+      ? (u, o) => fetchWithTimeout(u, o, timeoutMs)
+      : fetch;
+    const res = await fetchFn(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
@@ -1631,6 +1652,7 @@ async function askBrainWithProvider(endpoint, model, key, messages) {
     const data = await res.json().catch(() => ({}));
     const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
     if (!text) console.error(`[brain] ${new URL(endpoint).host} ${model}: respuesta vacía`);
+    if (data.usage && data.usage.total_tokens) groqTokenRecord(model, data.usage.total_tokens);
     return text || null;
   } catch (e) {
     console.error(`[brain] ${new URL(endpoint).host} ${model}:`, e.message);
@@ -1639,7 +1661,8 @@ async function askBrainWithProvider(endpoint, model, key, messages) {
 }
 
 async function askBrainWithGroq(messages) {
-  return askBrainWithProvider(GROQ_CHAT_URL, GROQ_CHAT_MODEL, config.groqApiKey, messages);
+  // (Fase 3a, ajuste 4 de Peter): el cerebro 120b usa timeout de 8 s.
+  return askBrainWithProvider(GROQ_CHAT_URL, GROQ_CHAT_MODEL, config.groqApiKey, messages, GROQ_BRAIN_TIMEOUT_MS);
 }
 
 async function askBrainWithOpenAI(messages) {
@@ -1654,24 +1677,44 @@ async function askBrainWithOpenAI(messages) {
 // fallan, se devuelve null y el flujo anterior toma el control (nunca se
 // bloquea la conversación por un fallo del cerebro).
 const GROQ_METRICS = { total: 0, groqOk: 0, groqFail: 0, openaiOk: 0, openaiFail: 0, lastLatencyMs: null, lastError: null, lastOkAt: null };
-function groqMetrics() { return { ...GROQ_METRICS }; }
+function groqMetrics() {
+  return {
+    ...GROQ_METRICS,
+    interpret: { ...INTERPRET_METRICS },
+    modo: groqInterpretMode(),
+    modeloInterprete: GROQ_INTERPRET_MODEL,
+    presupuestoTokens: groqTokenBudget(),
+  };
+}
 async function askBrain(messages) {
   const t0 = Date.now();
   if (config.groqApiKey) {
-    const groq = await askBrainWithGroq(messages);
-    const ms = Date.now() - t0;
-    GROQ_METRICS.total += 1;
-    GROQ_METRICS.lastLatencyMs = ms;
-    if (groq) {
-      GROQ_METRICS.groqOk += 1;
-      GROQ_METRICS.lastOkAt = new Date().toISOString();
-      GROQ_METRICS.lastError = null;
-      console.log(`[GROQ] ok ${ms}ms modelo=${GROQ_CHAT_MODEL}`);
-      return groq;
+    // (Fase 3a, ajuste 1 de Peter, presupuesto TPM): una respuesta del
+    // cerebro 120b gasta ~2,650 tokens y solo caben ~3 por minuto en el
+    // plan gratuito (8,000 TPM). Si el presupuesto está agotado, se salta
+    // Groq y se va directo al respaldo (OpenAI); nunca se bloquea la
+    // conversación por el límite.
+    if (!groqTokenCanSpend(GROQ_CHAT_MODEL, 2650)) {
+      console.log('[GROQ] presupuesto TPM agotado (120b) -> respaldo OpenAI');
+      GROQ_METRICS.total += 1;
+      GROQ_METRICS.groqFail += 1;
+      GROQ_METRICS.lastError = 'presupuesto_tpm_agotado';
+    } else {
+      const groq = await askBrainWithGroq(messages);
+      const ms = Date.now() - t0;
+      GROQ_METRICS.total += 1;
+      GROQ_METRICS.lastLatencyMs = ms;
+      if (groq) {
+        GROQ_METRICS.groqOk += 1;
+        GROQ_METRICS.lastOkAt = new Date().toISOString();
+        GROQ_METRICS.lastError = null;
+        console.log(`[GROQ] ok ${ms}ms modelo=${GROQ_CHAT_MODEL}`);
+        return groq;
+      }
+      GROQ_METRICS.groqFail += 1;
+      GROQ_METRICS.lastError = 'groq_sin_respuesta';
+      console.log(`[GROQ] fallo ${ms}ms (sin respuesta) -> respaldo OpenAI`);
     }
-    GROQ_METRICS.groqFail += 1;
-    GROQ_METRICS.lastError = 'groq_sin_respuesta';
-    console.log(`[GROQ] fallo ${ms}ms (sin respuesta) -> respaldo OpenAI`);
   }
   if (config.openaiApiKey) {
     const t1 = Date.now();
@@ -1721,6 +1764,337 @@ async function brainReply(st, text) {
   ];
   const raw = await askBrain(messages);
   return brainAnswerSafe(raw, st);
+}
+
+// ---------- intérprete GROQ (Fase 3a, 2026-11-14) ----------
+// GROQ como intérprete principal: el modelo 20b clasifica la intención del
+// mensaje y devuelve JSON estructurado. En la Fase 3a el intérprete corre
+// en MODO SOMBRA: en paralelo, solo registra qué intención habría elegido
+// comparada con detectIntent, y NUNCA decide ni cambia la respuesta del
+// prospecto (condición 1 de Peter, 2026-11-14). La activación (que el
+// intérprete decida) espera el reporte de sombra y la autorización de
+// Peter (condición 3). Modelos, precios y límites reverificados el
+// 2026-11-14: 20b y 120b son producción en el plan gratuito (30 RPM /
+// 1,000 RPD / 8,000 TPM / 200,000 TPD por modelo); los Llama son solo
+// Enterprise desde el 16 ago 2026.
+const GROQ_INTERPRET_MODEL = 'openai/gpt-oss-20b';
+const GROQ_INTERPRET_TIMEOUT_MS = 4000; // 3-4 s (ajuste 4 de Peter)
+const GROQ_BRAIN_TIMEOUT_MS = 8000; // el cerebro 120b se queda en 8 s
+const GROQ_TPM_LIMIT = 8000; // plan gratuito, por modelo
+const GROQ_TPM_HEADROOM = 500; // margen de seguridad
+const GROQ_CONFIDENCE_THRESHOLD = 0.6; // se calibra con los datos de sombra
+const GROQ_INTERPRET_EST_TOKENS = 600; // estimación conservadora por llamada
+
+// Taxonomía de intenciones del intérprete (diseño Fase 3, sección 4).
+const INTERPRET_INTENTS = new Set([
+  'info_general', 'como_funciona', 'demo', 'reunion', 'precio', 'sector',
+  'recado_dueno', 'vendedor', 'charla', 'fuera_de_tema', 'desconocida',
+]);
+
+// Interruptor de apagado (ajuste 3 de Peter): variable de entorno
+// GROQ_INTERPRETE. 'sombra' (por defecto) = el intérprete corre en
+// segundo plano y solo registra. 'off' = comportamiento v5.1 (sin
+// intérprete, solo palabras clave). Cambiar la variable en FadeHost y
+// reiniciar la app basta; no hay que redesplegar código. 'activo' se
+// habilita solo cuando Peter lo autorice tras el reporte de sombra; por
+// ahora se trata como sombra.
+function groqInterpretMode() {
+  const m = (process.env.GROQ_INTERPRETE || 'sombra').trim().toLowerCase();
+  if (m === 'off') return 'off';
+  if (m === 'activo') console.log('[INTERPRETE] modo "activo" aún no habilitado (Fase 3a: solo sombra); se usa sombra.');
+  return 'sombra';
+}
+
+// ---------- presupuesto de tokens por minuto (ajuste 1 de Peter) ----------
+// El plan gratuito permite 8,000 TPM por modelo. Se lleva una ventana
+// móvil de 60 s por modelo; si una llamada nueva superaría el límite, se
+// usa el respaldo por palabras clave (nunca se bloquea la conversación).
+// Los límites son por modelo: el intérprete (20b) y el cerebro (120b) no
+// se quitan presupuesto entre sí.
+const GROQ_TOKEN_WINDOW = { 'openai/gpt-oss-20b': [], 'openai/gpt-oss-120b': [] };
+function groqTokenUsedLastMinute(model) {
+  const arr = GROQ_TOKEN_WINDOW[model] || (GROQ_TOKEN_WINDOW[model] = []);
+  const now = Date.now();
+  while (arr.length && arr[0].t < now - 60000) arr.shift();
+  return arr.reduce((s, e) => s + e.tokens, 0);
+}
+function groqTokenCanSpend(model, estTokens) {
+  return groqTokenUsedLastMinute(model) + estTokens <= GROQ_TPM_LIMIT - GROQ_TPM_HEADROOM;
+}
+function groqTokenRecord(model, tokens) {
+  const arr = GROQ_TOKEN_WINDOW[model] || (GROQ_TOKEN_WINDOW[model] = []);
+  arr.push({ t: Date.now(), tokens: Math.max(0, Math.round(tokens) || 0) });
+}
+// Limpia la ventana de tokens (solo para pruebas: en producción la
+// ventana se vacía sola a los 60 s).
+function groqTokenReset() {
+  for (const k of Object.keys(GROQ_TOKEN_WINDOW)) GROQ_TOKEN_WINDOW[k] = [];
+}
+function groqTokenBudget() {
+  return {
+    'openai/gpt-oss-20b': { usadoUltimoMinuto: groqTokenUsedLastMinute('openai/gpt-oss-20b'), limite: GROQ_TPM_LIMIT },
+    'openai/gpt-oss-120b': { usadoUltimoMinuto: groqTokenUsedLastMinute('openai/gpt-oss-120b'), limite: GROQ_TPM_LIMIT },
+  };
+}
+
+// Métricas del intérprete (se suman a GROQ_METRICS en groqMetrics()).
+const INTERPRET_METRICS = { total: 0, ok: 0, jsonInvalido: 0, timeout: 0, sinPresupuesto: 0, sinClave: 0, lastLatencyMs: null, lastError: null };
+
+// Prompt compacto del intérprete (solo la taxonomía y ejemplos, NO la
+// base completa: cada llamada gasta ~500-600 tokens, no ~2,650).
+function interpretSystemPrompt() {
+  return [
+    'Eres el intérprete de intenciones de Daniela, asistente virtual de Blü Bee Technologies (empresa mexicana de IoT para empresas). Clasifica el mensaje del usuario en UNA intención de esta lista y responde SOLO con JSON, sin texto extra.',
+    'Intenciones: info_general (qué hace la empresa, a qué se dedican, qué soluciones ofrecen, beneficios, para qué sirve), como_funciona (cómo funciona la tecnología o la solución), demo (quiere agendar una demostración), reunion (quiere agendar reunión, junta, videollamada o cita), precio (precio, costo o cotización), sector (pregunta por un sector o describe un problema de su negocio), recado_dueno (dejar un mensaje para el dueño o hablar con la persona indicada), vendedor (ofrece un producto o servicio, es proveedor), charla (saludo o charla casual), fuera_de_tema (fútbol, viajes, compras personales, clima, noticias, chistes, coqueteo), desconocida (no se entiende qué quiere).',
+    'Responde SOLO este JSON: {"intencion":"...","confianza":0.0,"tema":"..."} La confianza es de 0 a 1. Si no estás seguro, usa "desconocida" con confianza baja.',
+  ].join('\n');
+}
+
+// Valida la salida del intérprete (ajuste 5 de Peter): si el JSON es
+// inválido o la intención no está en la taxonomía, se trata como
+// "desconocida". La confianza que reporta un modelo no siempre es
+// confiable: el umbral 0.6 se calibra con los datos del modo sombra.
+function parseInterpretResult(raw) {
+  if (!raw || typeof raw !== 'string') return { intencion: 'desconocida', confianza: 0, tema: null, jsonValido: false, error: 'sin_respuesta' };
+  let obj = null;
+  try {
+    const m = raw.match(/\{[\s\S]*\}/);
+    obj = m ? JSON.parse(m[0]) : JSON.parse(raw);
+  } catch {
+    return { intencion: 'desconocida', confianza: 0, tema: null, jsonValido: false, error: 'json_invalido' };
+  }
+  const intencion = obj && typeof obj.intencion === 'string' ? obj.intencion.trim() : '';
+  if (!INTERPRET_INTENTS.has(intencion)) {
+    return { intencion: 'desconocida', confianza: 0, tema: null, jsonValido: false, error: 'intencion_fuera_de_taxonomia' };
+  }
+  const confianza = typeof obj.confianza === 'number' ? Math.max(0, Math.min(1, obj.confianza)) : 0;
+  return { intencion, confianza, tema: typeof obj.tema === 'string' ? obj.tema : null, jsonValido: true, error: null };
+}
+
+// Llama al intérprete (Groq 20b). Devuelve { intencion, confianza, tema,
+// jsonValido, error, latenciaMs, tokensEntrada, tokensSalida, tokensTotal,
+// modelo }. Nunca lanza: cualquier error se devuelve como resultado con
+// error (y se trata como "desconocida" en el modo sombra).
+async function interpretWithGroq(text, opts = {}) {
+  const timeoutMs = opts.timeoutMs || GROQ_INTERPRET_TIMEOUT_MS;
+  const base = { intencion: 'desconocida', confianza: 0, tema: null, jsonValido: false, error: null, latenciaMs: 0, tokensEntrada: 0, tokensSalida: 0, tokensTotal: 0, modelo: GROQ_INTERPRET_MODEL };
+  INTERPRET_METRICS.total += 1;
+  if (!config.groqApiKey) {
+    INTERPRET_METRICS.sinClave += 1;
+    INTERPRET_METRICS.lastError = 'sin_clave';
+    return { ...base, error: 'sin_clave' };
+  }
+  if (!groqTokenCanSpend(GROQ_INTERPRET_MODEL, GROQ_INTERPRET_EST_TOKENS)) {
+    INTERPRET_METRICS.sinPresupuesto += 1;
+    INTERPRET_METRICS.lastError = 'presupuesto_tpm_agotado';
+    console.log('[INTERPRETE] presupuesto TPM agotado (20b) -> respaldo por palabras clave');
+    return { ...base, error: 'presupuesto_tpm_agotado' };
+  }
+  const t0 = Date.now();
+  try {
+    const res = await fetchWithTimeout(GROQ_CHAT_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.groqApiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: GROQ_INTERPRET_MODEL,
+        messages: [
+          { role: 'system', content: interpretSystemPrompt() },
+          { role: 'user', content: text },
+        ],
+        temperature: 0,
+        max_tokens: 120,
+      }),
+    }, timeoutMs);
+    const ms = Date.now() - t0;
+    INTERPRET_METRICS.lastLatencyMs = ms;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`[INTERPRETE] ${GROQ_INTERPRET_MODEL} HTTP ${res.status}: ${body.slice(0, 200)}`);
+      INTERPRET_METRICS.lastError = `http_${res.status}`;
+      return { ...base, error: `http_${res.status}`, latenciaMs: ms };
+    }
+    const data = await res.json().catch(() => ({}));
+    const raw = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
+    const usage = data.usage || {};
+    const tokensEntrada = usage.prompt_tokens || 0;
+    const tokensSalida = usage.completion_tokens || 0;
+    const tokensTotal = usage.total_tokens || (tokensEntrada + tokensSalida);
+    if (tokensTotal > 0) groqTokenRecord(GROQ_INTERPRET_MODEL, tokensTotal);
+    else groqTokenRecord(GROQ_INTERPRET_MODEL, GROQ_INTERPRET_EST_TOKENS);
+    const parsed = parseInterpretResult(raw);
+    if (parsed.jsonValido) INTERPRET_METRICS.ok += 1;
+    else {
+      INTERPRET_METRICS.jsonInvalido += 1;
+      INTERPRET_METRICS.lastError = parsed.error;
+    }
+    return { ...parsed, latenciaMs: ms, tokensEntrada, tokensSalida, tokensTotal, modelo: GROQ_INTERPRET_MODEL };
+  } catch (e) {
+    const ms = Date.now() - t0;
+    INTERPRET_METRICS.lastLatencyMs = ms;
+    const err = e && e.message === 'timeout' ? 'timeout' : (e && e.message ? e.message.slice(0, 80) : 'error');
+    if (err === 'timeout') INTERPRET_METRICS.timeout += 1;
+    INTERPRET_METRICS.lastError = err;
+    console.error(`[INTERPRETE] ${GROQ_INTERPRET_MODEL} fallo ${ms}ms:`, err);
+    return { ...base, error: err, latenciaMs: ms };
+  }
+}
+
+// ---------- modo sombra (Fase 3a, ajustes 2 y 3 de Peter) ----------
+// El intérprete corre EN PARALELO (segundo plano) y SOLO registra qué
+// intención habría elegido, comparada con detectIntent. NUNCA decide ni
+// cambia la respuesta del prospecto. Se activa con GROQ_INTERPRETE=sombra
+// (por defecto). Con GROQ_INTERPRETE=off no se llama a Groq. Cada entrada
+// registra: modelo, latencia, tokens, si el JSON fue válido y el error si
+// lo hubo (condición 2 de Peter, 2026-11-14). El archivo sobrevive a los
+// reinicios (está en stateDir, como preguntas-pendientes.json).
+const SHADOW_FILE = path.join(config.stateDir, 'sombra.json');
+
+function readShadowLog() {
+  try {
+    const list = JSON.parse(fs.readFileSync(SHADOW_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+function appendShadowEntry(entry) {
+  try {
+    const list = readShadowLog();
+    list.push(entry);
+    const trimmed = list.slice(-500); // últimas 500 (semanas de volumen actual)
+    fs.mkdirSync(config.stateDir, { recursive: true });
+    fs.writeFileSync(SHADOW_FILE, JSON.stringify(trimmed, null, 2));
+    return true;
+  } catch (e) {
+    console.error('[SOMBRA] no se pudo guardar la entrada:', e.message);
+    return false;
+  }
+}
+
+// ¿Coinciden la intención de Groq y la de detectIntent? Se comparan por
+// categoría comercial. Si ambas dicen "no hay intención", también
+// coinciden (Groq "desconocida" = detectIntent null).
+function shadowIntentsMatch(groqIntent, keywordKind, norm) {
+  if (!groqIntent) return false;
+  if (groqIntent === 'desconocida') return !keywordKind;
+  const map = {
+    demo: ['demo'],
+    reunion: ['meeting'],
+    precio: ['price'],
+    sector: ['sector'],
+    recado_dueno: ['pedro', 'pedro_message'],
+    vendedor: ['vendor'],
+    info_general: ['info', 'faq'],
+    como_funciona: ['info', 'faq'],
+    charla: ['greeting'],
+  };
+  if (map[groqIntent]) return map[groqIntent].includes(keywordKind);
+  if (groqIntent === 'fuera_de_tema') return !keywordKind && isOffTopicQuestion(norm);
+  return false;
+}
+
+// Corre el intérprete en segundo plano y registra la comparación. Nunca
+// lanza: cualquier error se registra como entrada con error.
+async function runShadowInterpret(from, identity, text, norm, keywordIntent) {
+  const t0 = Date.now();
+  try {
+    const result = await interpretWithGroq(text);
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      fecha: new Date().toISOString(),
+      identidad: identity,
+      mensaje: String(text || '').slice(0, 200),
+      keyword: keywordIntent ? keywordIntent.kind : null,
+      groq: result.intencion,
+      confianza: result.confianza,
+      coincide: shadowIntentsMatch(result.intencion, keywordIntent ? keywordIntent.kind : null, norm),
+      modelo: result.modelo,
+      latenciaMs: result.latenciaMs,
+      tokensEntrada: result.tokensEntrada,
+      tokensSalida: result.tokensSalida,
+      tokensTotal: result.tokensTotal,
+      jsonValido: result.jsonValido,
+      error: result.error,
+    };
+    appendShadowEntry(entry);
+    console.log(`[SOMBRA] ${entry.identidad} kw=${entry.keyword || 'null'} groq=${entry.groq} conf=${entry.confianza} coincide=${entry.coincide} json=${entry.jsonValido} ${entry.latenciaMs}ms tok=${entry.tokensTotal} err=${entry.error || '-'}`);
+    return entry;
+  } catch (e) {
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      fecha: new Date().toISOString(),
+      identidad: identity,
+      mensaje: String(text || '').slice(0, 200),
+      keyword: keywordIntent ? keywordIntent.kind : null,
+      groq: null,
+      confianza: 0,
+      coincide: false,
+      modelo: GROQ_INTERPRET_MODEL,
+      latenciaMs: Date.now() - t0,
+      tokensEntrada: 0,
+      tokensSalida: 0,
+      tokensTotal: 0,
+      jsonValido: false,
+      error: (e && e.message ? e.message : 'error').slice(0, 80),
+    };
+    appendShadowEntry(entry);
+    console.error('[SOMBRA] error inesperado:', e && e.message);
+    return entry;
+  }
+}
+
+// Dispara el modo sombra en segundo plano (sin esperar el resultado).
+// Condición 1 de Peter: nunca retrasa ni cambia la respuesta del
+// prospecto. Solo corre si el modo es 'sombra' y el mensaje no es vía
+// rápida (saludo/despedida: esos los resuelven las palabras clave sin
+// gastar llamada a Groq).
+// Solo mensajes comerciales de PROSPECTOS (orden de Peter 2026-11-14):
+// el dueño y el VIP Ricky NO entran a la sombra. Peter en modo
+// simulación SÍ entra, porque ahí actúa como prospecto (su identidad
+// queda anotada como 'simulacion' para distinguirlo en el reporte).
+function maybeRunShadow(from, st, text, norm, keywordIntent) {
+  if (groqInterpretMode() !== 'sombra') return null;
+  if (keywordIntent && (keywordIntent.kind === 'greeting' || keywordIntent.kind === 'farewell')) return null;
+  const esDueno = sameNumber(from, config.peterWhatsApp);
+  const esSimulacion = esDueno && isSimulationMode(st);
+  if (isVipRicky(from)) return null;
+  if (esDueno && !esSimulacion) return null;
+  const identidad = esSimulacion ? 'simulacion' : resolveIdentity(from);
+  return runShadowInterpret(from, identidad, text, norm, keywordIntent).catch(() => null);
+}
+
+// Resumen del modo sombra para GET /metricas-sombra: totales, % de JSON
+// válido, % de coincidencia con detectIntent (global y por umbral de
+// confianza, para calibrar el umbral 0.6), y los casos que difieren.
+function shadowSummary() {
+  const list = readShadowLog();
+  const total = list.length;
+  const valid = list.filter((e) => e.jsonValido).length;
+  const match = list.filter((e) => e.coincide).length;
+  const errors = list.filter((e) => e.error).length;
+  function matchAtThreshold(th) {
+    const sub = list.filter((e) => e.jsonValido && e.confianza >= th);
+    if (!sub.length) return { total: 0, coincidePct: null };
+    const m = sub.filter((e) => e.coincide).length;
+    return { total: sub.length, coincidePct: Math.round((m / sub.length) * 1000) / 10 };
+  }
+  return {
+    modo: groqInterpretMode(),
+    modelo: GROQ_INTERPRET_MODEL,
+    total,
+    jsonValido: valid,
+    jsonValidoPct: total ? Math.round((valid / total) * 1000) / 10 : null,
+    coincide: match,
+    coincidePct: total ? Math.round((match / total) * 1000) / 10 : null,
+    errores: errors,
+    porUmbral: {
+      '>=0.6': matchAtThreshold(0.6),
+      '>=0.7': matchAtThreshold(0.7),
+      '>=0.8': matchAtThreshold(0.8),
+      '>=0.9': matchAtThreshold(0.9),
+    },
+    diferencias: list.filter((e) => !e.coincide).slice(-20),
+    ultimas: list.slice(-10),
+  };
 }
 
 // ---------- detección de intención (solo texto libre, sin menús) ----------
@@ -2854,6 +3228,13 @@ async function handleMainIntent(msg, st, text, norm) {
   const leTe = st.formality === 'tu' ? 'te' : 'le';
   const intent = detectIntent(text, norm);
 
+  // (Fase 3a, modo sombra): el intérprete corre en segundo plano y solo
+  // registra qué intención habría elegido, comparada con detectIntent.
+  // NUNCA decide ni cambia la respuesta (condición 1 de Peter). Solo
+  // mensajes comerciales de prospectos (el dueño y Ricky no entran;
+  // Peter en simulación sí, como prospecto).
+  maybeRunShadow(from, st, text, norm, intent);
+
   // VIP Ricky (v3.4): los cariños y piropos de Ricky no son límite ni tema
   // de negocio: Daniela le responde con calidez, como amiga, y sigue. Solo
   // si no hay una intención de negocio (demo, precio...): esa se atiende
@@ -3570,4 +3951,24 @@ module.exports = {
   isSimulationMode,
   handleOwnerMessage,
   groqMetrics,
+  // Fase 3a (GROQ como intérprete, 2026-11-14): intérprete 20b, modo
+  // sombra, interruptor, presupuesto TPM y validación de salida.
+  GROQ_INTERPRET_MODEL,
+  GROQ_INTERPRET_TIMEOUT_MS,
+  GROQ_BRAIN_TIMEOUT_MS,
+  GROQ_CONFIDENCE_THRESHOLD,
+  fetchWithTimeout,
+  groqInterpretMode,
+  interpretSystemPrompt,
+  parseInterpretResult,
+  interpretWithGroq,
+  groqTokenBudget,
+  groqTokenCanSpend,
+  groqTokenRecord,
+  groqTokenReset,
+  shadowIntentsMatch,
+  runShadowInterpret,
+  maybeRunShadow,
+  readShadowLog,
+  shadowSummary,
 };
