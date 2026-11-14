@@ -2065,8 +2065,14 @@ function maybeRunShadow(from, st, text, norm, keywordIntent) {
 // Resumen del modo sombra para GET /metricas-sombra: totales, % de JSON
 // válido, % de coincidencia con detectIntent (global y por umbral de
 // confianza, para calibrar el umbral 0.6), y los casos que difieren.
+// Solo cuentan los mensajes de PROSPECTOS REALES (orden de Peter
+// 2026-11-14): las pruebas de Peter en modo simulación quedan guardadas
+// en el registro, pero NO entran en el conteo de las 50 muestras ni en
+// ningún porcentaje. Su cantidad se reporta aparte en 'simulacion'
+// para que quede claro que se registraron pero no se contaron.
 function shadowSummary() {
-  const list = readShadowLog();
+  const all = readShadowLog();
+  const list = all.filter((e) => e.identidad !== 'simulacion');
   const total = list.length;
   const valid = list.filter((e) => e.jsonValido).length;
   const match = list.filter((e) => e.coincide).length;
@@ -2081,6 +2087,7 @@ function shadowSummary() {
     modo: groqInterpretMode(),
     modelo: GROQ_INTERPRET_MODEL,
     total,
+    simulacion: all.length - total,
     jsonValido: valid,
     jsonValidoPct: total ? Math.round((valid / total) * 1000) / 10 : null,
     coincide: match,

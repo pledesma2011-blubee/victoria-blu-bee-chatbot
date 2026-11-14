@@ -1495,6 +1495,28 @@ check('timeout del intérprete es 4000 ms', daniela.GROQ_INTERPRET_TIMEOUT_MS ==
 check('umbral de confianza es 0.6 (a calibrar con sombra)', daniela.GROQ_CONFIDENCE_THRESHOLD === 0.6);
 
 
+// (w-10) Exclusión de simulación del conteo (orden de Peter 2026-11-14):
+// las pruebas de Peter en modo simulación no cuentan para las 50 muestras.
+console.log('  (w-10) Simulación excluida del conteo de las 50:');
+const SHADOW_FILE_X = path.join(tmpDir, 'sombra.json');
+function entryX(id, identidad, keyword, groq, coincide, jsonValido) {
+  return { id, fecha: '2026-11-14T17:30:00.000Z', identidad, mensaje: 'prueba', keyword, groq, confianza: 0.95, coincide, modelo: 'openai/gpt-oss-20b', latenciaMs: 500, tokensEntrada: 300, tokensSalida: 80, tokensTotal: 380, jsonValido, error: null };
+}
+fs.writeFileSync(SHADOW_FILE_X, JSON.stringify([
+  entryX('a1', 'prospect', 'demo', 'demo', true, true),
+  entryX('a2', 'prospect', null, 'info_general', false, true),
+  entryX('a3', 'prospect', 'precio', 'precio', true, true),
+  entryX('s1', 'simulacion', null, 'info_general', false, true),
+  entryX('s2', 'simulacion', 'demo', 'demo', true, true),
+], null, 2));
+const sumX = daniela.shadowSummary();
+check('total cuenta solo prospectos (3, no 5)', sumX.total === 3, `total=${sumX.total}`);
+check('simulacion reporta las excluidas (2)', sumX.simulacion === 2, `simulacion=${sumX.simulacion}`);
+check('jsonValidoPct sobre prospectos (100%)', sumX.jsonValidoPct === 100, `jsonValidoPct=${sumX.jsonValidoPct}`);
+check('coincidePct sobre prospectos (2 de 3 = 66.7%)', sumX.coincidePct === 66.7, `coincidePct=${sumX.coincidePct}`);
+check('diferencias excluye simulación (solo a2)', sumX.diferencias.length === 1 && sumX.diferencias[0].id === 'a2', JSON.stringify(sumX.diferencias.map((e) => e.id)));
+check('ultimas excluye simulación (a1, a2, a3)', sumX.ultimas.length === 3 && sumX.ultimas.every((e) => e.identidad === 'prospect'), JSON.stringify(sumX.ultimas.map((e) => e.id)));
+
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');
   console.log('\n(verificación global):');
