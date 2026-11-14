@@ -154,7 +154,7 @@ function cleanupVideos() {
     m = since(mark, A2);
     const unanswered = readUnanswered();
     console.log('    "¿tienen beacons de color rosa con brillitos?" (no la sabe):');
-    check('NO inventa una respuesta (avisa a Pedro, sin contestar)', replies(m).length === 0 && notices(since(mark, PETER)).length > 0, `respuestas=${JSON.stringify(replies(m))}`);
+    check('NO inventa una respuesta (avisa a Pedro y contesta con la explicación general, v5.3.1 nunca en silencio)', replies(m).length > 0 && replies(m).every((r) => !/rosa|brillitos/i.test(r)) && hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas/) && notices(since(mark, PETER)).length > 0, `respuestas=${JSON.stringify(replies(m))}`);
     check('la pregunta queda en el log de aprendizaje', unanswered.some((u) => /color rosa con brillitos/.test(u.pregunta)), JSON.stringify(unanswered.slice(-2)));
     check('el log NO guarda teléfono ni nombre', !unanswered.some((u) => u.telefono || u.nombre || u.phone));
 

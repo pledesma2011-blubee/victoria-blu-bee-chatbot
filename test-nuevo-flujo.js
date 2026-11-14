@@ -483,7 +483,7 @@ async function incoming(phone, text) {
   console.log('\n(k-h3) Peter: "Hola Daniela, ¿qué haces?":');
   check('NO dice "dame un segundo"', !hasText(m, /Dame un segundo/));
   // stripGreetingPrefix lo deja en saludo puro, así que saluda de vuelta.
-  check('saluda de vuelta', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('saluda de vuelta (sin "Muy bien, gracias": no preguntaron cómo está)', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. ¿En qué le puedo ayudar\?/) && !hasText(m, /Muy bien, gracias/));
   check('NO guarda pregunta pendiente', !daniela.readPendingQuestions().some((q) => q.who === 'pedro' && /que haces/.test(q.pregunta)));
 
   // ---------- (l) Cerebro de IA (v4.0, orden de Peter 2026-11-13):
@@ -914,8 +914,11 @@ async function incoming(phone, text) {
   const tr = daniela.timeReply();
   check('timeReply dice la hora de CDMX', /(Es la|Son las) \d{1,2}:\d{2}/.test(tr) && /hora de la Ciudad de México/.test(tr), `reply=${tr}`);
   // (r-d) ownerGreetingReply saluda con la hora del día correcta.
-  const og = daniela.ownerGreetingReply();
-  check('ownerGreetingReply usa la hora del día', /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias/.test(og), `greeting=${og}`);
+  const og = daniela.ownerGreetingReply('hola');
+  check('ownerGreetingReply usa la hora del día', /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. ¿En qué le puedo ayudar\?/.test(og), `greeting=${og}`);
+  check('ownerGreetingReply "Hola" NO contesta "Muy bien, gracias"', !/Muy bien, gracias/.test(og), `greeting=${og}`);
+  const og2 = daniela.ownerGreetingReply('hola como estas');
+  check('ownerGreetingReply "¿cómo estás?" SÍ contesta "Muy bien, gracias"', /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/.test(og2), `greeting=${og2}`);
   // (r-e) Peter pregunta "Que hora es?" en vivo: Daniela contesta la hora,
   // NO la presentación institucional.
   mark = sent.length;
@@ -1043,7 +1046,7 @@ async function incoming(phone, text) {
   st = readState(PETER_OWNER);
   console.log('  (u-a) Peter con estado corrupto ("taking_message") dice "Hola":');
   check('la etapa se autocura a main', st && st.stage === 'main', `stage=${st && st.stage}`);
-  check('recibe el saludo de dueño, no el flujo de recado', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('recibe el saludo de dueño, no el flujo de recado', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. ¿En qué le puedo ayudar\?/) && !hasText(m, /Muy bien, gracias/));
   check('NO le pasa el mensaje al área', !hasText(m, /Ya le pasé su mensaje al área correspondiente/));
   check('NO le manda el aviso de recado a él mismo', !hasText(m, /Nuevo recado de Pedro/));
   check('NO cierra la conversación con resumen', !hasText(m, /Antes de despedirme, le confirmo/));
@@ -1063,7 +1066,7 @@ async function incoming(phone, text) {
   mark = sent.length;
   await incoming(PETER_OWNER, 'Hola');
   m = since(mark, PETER_OWNER);
-  check('A1: "Hola" -> saludo de dueño', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('A1: "Hola" -> saludo de dueño', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. ¿En qué le puedo ayudar\?/) && !hasText(m, /Muy bien, gracias/));
   check('A2: "Hola" NO manda video de bienvenida', !hasKind(m, 'video'));
   mark = sent.length;
   await incoming(PETER_OWNER, '¿Cómo sabes que soy Pedro?');
@@ -1074,7 +1077,7 @@ async function incoming(phone, text) {
   mark = sent.length;
   await incoming(PETER_OWNER, 'Hola');
   m = since(mark, PETER_OWNER);
-  check('A6: "Hola" de nuevo -> saludo normal de dueño', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('A6: "Hola" de nuevo -> saludo normal de dueño', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. ¿En qué le puedo ayudar\?/) && !hasText(m, /Muy bien, gracias/));
   check('A7: NO se activa flujo comercial (sin resumen ni cierre)', !hasText(m, /Antes de despedirme, le confirmo/) && !hasText(m, /Ya le pasé su mensaje/));
 
   // (v-B) Estados residuales generalizados (prueba B): el dueño llega en
@@ -1090,7 +1093,7 @@ async function incoming(phone, text) {
   m = since(mark, PETER_OWNER);
   st = readState(PETER_OWNER);
   check('B1: la etapa demo_capture se autocura a main', st && st.stage === 'main', `stage=${st && st.stage}`);
-  check('B2: recibe el saludo de dueño, no el flujo de demo', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. Muy bien, gracias\. ¿En qué le puedo ayudar\?/));
+  check('B2: recibe el saludo de dueño, no el flujo de demo', hasText(m, /Hola Pedro, (buenos días|buenas tardes|buenas noches)\. ¿En qué le puedo ayudar\?/) && !hasText(m, /Muy bien, gracias/));
   check('B3: NO pide datos de demo', !hasText(m, /¿De qué empresa nos escribe|demo/i) || hasText(m, /Hola Pedro/));
 
   // (v-F) Usuarios independientes (prueba F): dos prospectos a la vez, sin
@@ -1730,6 +1733,53 @@ config.groqApiKey = realGroqKeyX3;
   global.fetch = realFetchY;
   config.groqApiKey = realGroqKeyY;
   if (realModeY !== undefined) process.env.GROQ_INTERPRETE = realModeY; else delete process.env.GROQ_INTERPRETE;
+
+  // ---------- (z) v5.3.1 — hallazgos de Peter 2026-11-14 (prueba en simulación)
+  // (z-1) NUNCA en silencio: un prospecto manda un mensaje sin intención ni
+  // respuesta en la base y el cerebro FALLA (Groq caído / TPM agotado) ->
+  // Daniela manda la explicación general (no silencio), guarda la pregunta
+  // pendiente y avisa a Pedro. Caso real: un mensaje largo pegado de una
+  // lista llegó así y Daniela no contestó nada.
+  console.log('\n(z) v5.3.1 — nunca en silencio y anti-repetición en la base:');
+  const Z_PROSPECT = '521234998877';
+  function zState() {
+    fs.writeFileSync(path.join(tmpDir, `${Z_PROSPECT}.json`), JSON.stringify({
+      phone: Z_PROSPECT, stage: 'main', formality: 'usted', handedOff: false,
+    }, null, 2));
+  }
+  const realFetchZ = global.fetch;
+  const realGroqKeyZ = config.groqApiKey;
+  config.groqApiKey = 'test-fake-key';
+  global.fetch = async () => { throw new Error('red caída (simula Groq sin respuesta)'); };
+  zState();
+  const pendAntes = daniela.readPendingQuestions().length;
+  mark = sent.length;
+  await incoming(Z_PROSPECT, '¿para qué me puede servir?');
+  m = since(mark, Z_PROSPECT);
+  check('z-1: cerebro caído -> Daniela SÍ contesta (no silencio)', m.filter((x) => x.kind === 'text').length > 0, `respuestas=${m.length}`);
+  check('z-1: contesta con la explicación general de Blü Bee', hasText(m, /En Blü Bee creamos soluciones basadas en Internet de las Cosas/));
+  check('z-1: guarda la pregunta pendiente para Pedro', daniela.readPendingQuestions().length === pendAntes + 1, `pendientes=${daniela.readPendingQuestions().length}`);
+  check('z-1: avisa a Pedro (🔔)', notices(since(mark, PETER)).length > 0);
+
+  // (z-2) Anti-repetición en la base de conocimiento: el prospecto repite
+  // exactamente la misma pregunta de beneficios -> la segunda respuesta NO
+  // es idéntica a la primera (el guardia la varía con el cerebro).
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: 'Como le comentaba, los beneficios son saber lo que pasa en su negocio en tiempo real: dónde está cada persona y equipo, qué zonas se visitan más, y recibir alertas cuando algo sale de lo esperado.' } }] }),
+  });
+  zState();
+  mark = sent.length;
+  await incoming(Z_PROSPECT, '¿qué beneficios tendría implementar esto?');
+  const primera = texts(since(mark, Z_PROSPECT));
+  mark = sent.length;
+  await incoming(Z_PROSPECT, '¿qué beneficios tendría implementar esto?');
+  const segunda = texts(since(mark, Z_PROSPECT));
+  check('z-2: primera respuesta es la de beneficios', primera.some((b) => /Los beneficios son saber lo que pasa/.test(b)));
+  check('z-2: segunda respuesta NO es idéntica a la primera', segunda.length > 0 && !segunda.some((b) => primera.includes(b)), `segunda=${(segunda[0] || '').slice(0, 60)}`);
+  check('z-2: segunda respuesta referencia lo anterior ("Como le comentaba")', segunda.some((b) => /Como le comentaba/.test(b)));
+  global.fetch = realFetchZ;
+  config.groqApiKey = realGroqKeyZ;
 
   // ---------- Sin botones en todo el flujo
   const buttons = sent.filter((s) => s.kind === 'buttons');

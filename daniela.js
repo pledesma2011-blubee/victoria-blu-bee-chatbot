@@ -2403,7 +2403,7 @@ async function answerInfoQuestion(st, text, norm) {
   const from = st.phone;
   const kb = findAnswer(text);
   if (kb) {
-    await wa.sendText(from, kb.answer);
+    await sendReply(from, st, kb.answer, text);
     const sector = detectSector(text);
     if (sector) {
       st.sector = sector;
@@ -2455,8 +2455,16 @@ function greetingByTime() {
 // siempre "buenos días", y a las 5:43 p. m. contestaba "buenos días" dos
 // veces seguidas. La repetición era síntoma del saludo con la hora
 // equivocada: con la hora correcta, Peter ya no tiene que cuestionarlo.
-function ownerGreetingReply() {
-  return `Hola Pedro, ${greetingByTime()}. Muy bien, gracias. ¿En qué le puedo ayudar?`;
+// (v5.3.1, hallazgo de Peter 2026-11-14): el saludo NO contesta
+// "Muy bien, gracias" si no se preguntó "¿cómo estás?". Solo lo
+// incluye cuando el mensaje pregunta por el estado de Daniela
+// ("hola, ¿cómo estás?", "¿qué tal?"). Un "Hola" a secas recibe
+// solo el saludo.
+function ownerGreetingReply(norm) {
+  const asksHow = /como (estas|estan|andas)|como te va|como va todo|que tal|que cuentas|que me cuentas|todo bien/.test(norm || '');
+  return asksHow
+    ? `Hola Pedro, ${greetingByTime()}. Muy bien, gracias. ¿En qué le puedo ayudar?`
+    : `Hola Pedro, ${greetingByTime()}. ¿En qué le puedo ayudar?`;
 }
 
 // Guardia anti-repetición (orden de Peter 2026-11-14): Daniela NUNCA
@@ -3365,7 +3373,7 @@ async function handleOwnerMessage(msg, st, text, norm) {
   }
   const rest = stripGreetingPrefix(norm);
   if (!rest) {
-    await wa.sendText(from, ownerGreetingReply());
+    await wa.sendText(from, ownerGreetingReply(norm));
     saveState(st);
     return;
   }
@@ -3462,7 +3470,7 @@ async function handleMainIntent(msg, st, text, norm) {
   if (!intent) {
     const kb = findAnswer(text);
     if (kb) {
-      await wa.sendText(from, kb.answer);
+      await sendReply(from, st, kb.answer, text);
       const sector = detectSector(text);
       if (sector) {
         st.sector = sector;
@@ -3552,12 +3560,34 @@ async function handleMainIntent(msg, st, text, norm) {
       maybeRequestFarewellVideo(st);
       return;
     }
+    // (v5.3.1, regla de Peter 2026-11-14: NUNCA en silencio): si el
+    // cerebro no contesta (Groq caído, presupuesto TPM agotado, sin
+    // respaldo de OpenAI), Daniela NO se queda callada. Manda la
+    // explicación general de Blü Bee para que el prospecto tenga algo
+    // útil, guarda la pregunta pendiente y avisa a Pedro para que él
+    // la responda. Caso real 2026-11-14: un mensaje largo pegado de una
+    // lista llegó sin intención ni respuesta en la base, el cerebro
+    // devolvió vacío y Daniela no contestó nada.
     logUnanswered(text);
+    // Excepción anti-spam (v3.4): un mensaje de SOLO emojis de un extraño
+    // sigue sin respuesta (no es una pregunta de un prospecto). La regla
+    // "nunca en silencio" aplica a mensajes con texto.
+    if (isEmojiOnly(text)) {
+      await notifyPeter(
+        'Mensaje que no es de Blü Bee',
+        `Mensaje en tu WhatsApp Business que no es de Blü Bee, de ${st.name || from} (${from}):\n"${text}"\n\nDaniela no contestó (solo emojis).`,
+        st
+      );
+      return;
+    }
+    savePendingQuestion(from, text, 'peter');
     await notifyPeter(
       'Mensaje que no es de Blü Bee',
-      `Mensaje en tu WhatsApp Business que no es de Blü Bee, de ${st.name || from} (${from}):\n"${text}"\n\nDaniela no contestó.`,
+      `Mensaje en tu WhatsApp Business que no es de Blü Bee, de ${st.name || from} (${from}):\n"${text}"\n\nDaniela no lo entendió (el cerebro no contestó) y le mandó la explicación general.`,
       st
     );
+    await sendReply(from, st, 'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.\n\n¿Para qué sector lo necesita? (Hotel, hospital, viñedo, centro comercial, industria, gobierno, ciudad inteligente…)', text);
+    maybeRequestFarewellVideo(st);
     return;
   }
 
@@ -3689,7 +3719,7 @@ async function handleMainIntent(msg, st, text, norm) {
       // si no hay, la respuesta corta del FAQ.
       const kb = findAnswer(text);
       if (kb) {
-        await wa.sendText(from, kb.answer);
+        await sendReply(from, st, kb.answer, text);
         const sector = detectSector(text);
         if (sector) {
           st.sector = sector;
@@ -3712,7 +3742,7 @@ async function handleMainIntent(msg, st, text, norm) {
       // respuesta experta manda sobre el pitch genérico del sector.
       const kb = findAnswer(text);
       if (kb) {
-        await wa.sendText(from, kb.answer);
+        await sendReply(from, st, kb.answer, text);
         st.sector = intent.key;
         saveState(st);
         if (kb.offerVideo) {
@@ -3736,7 +3766,7 @@ async function handleMainIntent(msg, st, text, norm) {
       // si no, la explicación general de Blü Bee.
       const kb = findAnswer(text);
       if (kb) {
-        await wa.sendText(from, kb.answer);
+        await sendReply(from, st, kb.answer, text);
         const sector = detectSector(text);
         if (sector) {
           st.sector = sector;
@@ -3749,9 +3779,10 @@ async function handleMainIntent(msg, st, text, norm) {
         }
         return;
       }
-      await wa.sendText(
-        from,
-        'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.\n\n¿Para qué sector lo necesita? (Hotel, hospital, viñedo, centro comercial, industria, gobierno, ciudad inteligente…)'
+      await sendReply(
+        from, st,
+        'En Blü Bee creamos soluciones basadas en Internet de las Cosas (IoT), diseñadas para cada caso en específico. Cada empresa, hotel, hospital, viñedo o ciudad tiene necesidades distintas, y nosotros creamos la solución para ese caso.\n\n¿Para qué sector lo necesita? (Hotel, hospital, viñedo, centro comercial, industria, gobierno, ciudad inteligente…)',
+        text
       );
       return;
     }
@@ -3820,7 +3851,7 @@ async function handleMainIntent(msg, st, text, norm) {
           saveState(st);
           return;
         }
-        await sendReply(from, st, ownerGreetingReply(), text);
+        await sendReply(from, st, ownerGreetingReply(norm), text);
         saveState(st);
         return;
       }
