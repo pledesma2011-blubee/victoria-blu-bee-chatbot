@@ -1,7 +1,17 @@
 // Daniela — la secretaria virtual de Blü Bee Technologies.
-// Versión 5.3.3 (2026-11-18): deduplicación por id de mensaje (wamid) —
-// Meta puede entregar el mismo mensaje dos veces y Daniela contestaba
-// dos veces; ahora la segunda entrega se ignora sin contestar.
+// Versión 5.3.5 (2026-11-18): el cierre (closeChat) ya no manda al
+// remitente el resumen de los datos capturados ("Antes de despedirme, le
+// confirmo..."). Solo se le confirma que su mensaje será canalizado y
+// los detalles solo van a Pedro por el canal interno (corrección de
+// Peter 2026-11-18, captura de pantalla).
+// (v5.3.4: mensajes personales para Pedro — los contactos antiguos
+// escriben al número de WhatsApp Business para temas personales y
+// Daniela no se los pasaba a Pedro. Ahora, si el mensaje es claramente
+// personal, Daniela le pregunta al remitente con quién quiere contactar
+// (SIN usar el nombre "Pedro" en la respuesta automática), guarda el
+// recado personal y avisa a Pedro por el canal interno.)
+// (v5.3.3: deduplicación por id de mensaje, wamid — la segunda entrega
+// de Meta se ignora sin contestar.)
 // Lógica de conversación: estados, intenciones, recados, seguridad y cierres.
 // Diseño v2 (2026-11-10, aprobado por Peter): conversación humana, sin menús.
 // Flujo: saludo con video → nombre+empresa → cómo dirigirse → datos de
@@ -78,6 +88,7 @@ const {
 
 const STATE_DIR = config.stateDir;
 const LEADS_FILE = path.join(config.stateDir, 'leads.json');
+const PERSONAL_RECADOS_FILE = path.join(config.stateDir, 'recados-personales.json');
 
 // ---------- utilidades ----------
 
@@ -136,7 +147,7 @@ function loadState(phone) {
     offtopicCount: 0, // preguntas generales fuera del negocio en esta conversación
     sector: null, // sector detectado (vinedo, hotel, hospital, ...) para adaptar la conversación
     personalTopic: false, // el tema NO es de Blü Bee (personal u otro negocio): se canaliza a Pedro
-    personalGreeted: false, // ya se respondió cálidamente al saludo casual a Pedro
+    personalGreeted: false, // ya se recibió un mensaje personal dirigido a Pedro (v5.3.4: se reenvía de inmediato)
     farewellVideoRequested: false, // ya se pidió el video de despedida en esta conversación
     farewellIdentity: null, // { kind: 'person'|'company'|'generic', name } usada en la solicitud (v3.3)
     farewellPending: null, // { kind, name, file, requestedAt } si la despedida se hizo sin video (entrega diferida)
@@ -285,6 +296,37 @@ function readLeads() {
   try {
     const leads = JSON.parse(fs.readFileSync(LEADS_FILE, 'utf8'));
     return Array.isArray(leads) ? leads : [];
+  } catch { return []; }
+}
+
+// Recados personales para Pedro (v5.3.4): mensajes de contactos que
+// escriben al número de WhatsApp Business para temas personales. NO
+// son leads de negocio: van a su propio archivo y nunca a leads.json.
+// En simulación no se guarda nada real (igual que saveLead).
+function savePersonalRecado(recado) {
+  if (recado && recado.telefono && sameNumber(recado.telefono, config.peterWhatsApp)) {
+    try {
+      const pst = loadState(recado.telefono);
+      if (pst && pst.simulation) { console.log('[SIMULACIÓN] recado personal NO guardado (simulación)'); return null; }
+    } catch { /* si no se puede leer el estado, se guarda normal */ }
+  }
+  let recados = [];
+  try {
+    recados = JSON.parse(fs.readFileSync(PERSONAL_RECADOS_FILE, 'utf8'));
+    if (!Array.isArray(recados)) recados = [];
+  } catch { /* archivo nuevo */ }
+  recado.fecha = new Date().toISOString();
+  recados.push(recado);
+  if (recados.length > 200) recados = recados.slice(-200);
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(PERSONAL_RECADOS_FILE, JSON.stringify(recados, null, 2));
+  return recado;
+}
+
+function readPersonalRecados() {
+  try {
+    const recados = JSON.parse(fs.readFileSync(PERSONAL_RECADOS_FILE, 'utf8'));
+    return Array.isArray(recados) ? recados : [];
   } catch { return []; }
 }
 
@@ -1424,26 +1466,16 @@ function scheduleFarewellRetry(phone) {
 // ---------- cierre de cada chat ----------
 
 async function closeChat(st) {
-  // Resumen de confirmación con todos los datos capturados, antes del cierre.
-  const dataLines = [];
-  if (st.name) {
-    dataLines.push(st.preferredName && st.preferredName !== st.name
-      ? `• Nombre: ${st.name} (le gusta que le llamen ${st.preferredName})`
-      : `• Nombre: ${st.name}`);
-  }
-  if (st.company) dataLines.push(`• Empresa: ${st.company}`);
-  if (st.email) dataLines.push(`• Correo: ${st.email}`);
-  if (st.contactPhone && st.contactPhone !== st.phone) dataLines.push(`• Teléfono de contacto: ${st.contactPhone}`);
-  if (st.contactPref) dataLines.push(`• Prefiere: ${st.contactPref === 'llamada' ? 'llamada' : 'WhatsApp'}`);
-  if (st.preferredName) dataLines.push(`• Trato: ${st.preferredName}, de ${st.formality === 'tu' ? 'tú' : 'usted'}`);
-  if (st.need) dataLines.push(`• Necesidad: ${st.need}`);
-  if (dataLines.length > 0) {
-    try {
-      await wa.sendText(st.phone, `Antes de despedirme, le confirmo lo que le paso al área correspondiente:\n${dataLines.join('\n')}\n• WhatsApp: ${st.phone}`);
-    } catch (e) {
-      console.error('Error mandando el resumen:', e.message);
-    }
-  }
+  // (v5.3.5, corrección de Peter 2026-11-18): NO se manda al remitente el
+  // resumen de los datos capturados ("Antes de despedirme, le confirmo lo
+  // que le paso al área correspondiente: Nombre, Trato, Necesidad,
+  // WhatsApp..."). Ese mensaje devolvía a la persona su nombre y su número
+  // de WhatsApp, y Peter no quiere que se le mande. El remitente solo
+  // recibe la confirmación breve de que su mensaje será canalizado (ya
+  // enviada por el flujo antes de llegar aquí) y la despedida. Los
+  // detalles completos solo van a Peter por el canal interno (notifyPeter),
+  // que cada flujo (demo, reunión, recado, mensaje personal) llama antes
+  // de cerrar.
   // Video de despedida personalizado (v3, best-effort, nunca retrasa la despedida).
   // Escenario A (conversación larga, el video ya está listo): se manda el video
   // institucional y DESPUÉS los enlaces de las redes.
@@ -2381,11 +2413,13 @@ function isAffirmative(text) {
   return contains(text, ['claro', 'por favor', 'me gustaria', 'quiero verlo', 'si quiero', 'adelante', 'dale']);
 }
 
-// ---------- contactos personales / temas que no son Blü Bee (v3) ----------
+// ---------- contactos personales / temas que no son Blü Bee (v3, v5.3.4) ----------
 // Cuando el mensaje NO es de Blü Bee (saludo personal a Pedro, tema social,
-// u otro negocio), Daniela NO intenta vender: responde con calidez, se
-// presenta como la asistente virtual de Pedro y le pasa el mensaje a Pedro
-// de inmediato.
+// u otro negocio), Daniela NO intenta vender: lo canaliza a Pedro.
+// (v5.3.4, corrección de Peter 2026-11-18): la PRIMERA respuesta al
+// remitente de un mensaje personal NUNCA usa el nombre "Pedro": Daniela le
+// pregunta con quién quiere contactar y le dice que canaliza su mensaje.
+// El mensaje se reenvía a Pedro por el canal interno en el mismo momento.
 // OJO: esto NO rompe la regla de anonimato del CEO. La regla es no revelar
 // el nombre "Pedro" a un EXTRAÑO. Aquí la persona YA conoce a Pedro (lo
 // saluda por su nombre o le escribe de otro negocio), así que Daniela puede
@@ -2401,31 +2435,89 @@ const OTHER_BUSINESS_PATTERNS = [
 ];
 
 // Detecta si el mensaje es personal / no es de Blü Bee.
-// Devuelve 'greeting' | 'other_business' | 'social' o null.
+// Devuelve 'personal' | 'other_business' | 'social' o null.
+// (v5.3.4: 'personal' sustituye al viejo 'greeting'. Antes, el primer
+// saludo a Pedro se contestaba con un "¡Hola! Bien, ¿y tú?" y el mensaje
+// nunca llegaba a Pedro; ahora se reenvía de inmediato.)
 // Nunca se activa para intenciones claras de negocio (demo, precio, info,
 // sector, faq, proveedor, despedida, ni "hablar con Pedro").
-function detectPersonal(text, norm, st, intent) {
+
+// Señales de contenido personal (v5.3.4): invitación o planes con Pedro,
+// saludo o pregunta sobre su vida o su familia. Se evalúan sobre `norm`
+// (sin acentos ni mayúsculas).
+const PERSONAL_CONTENT_PATTERNS = [
+  /\bnos vemos\b/, /\bvamos a\b/, /\bsalir\b/, /\bsalimos\b/,
+  /\bvisitar\b/, /\bte visito\b/, /\bpaso a verte\b/, /\bcomer\b/,
+  /\bcomemos\b/, /\bcafe\b/, /\btomar algo\b/, /\buna cerveza\b/,
+  /\bcumpleanos\b/, /\bcumple\b/, /\bfiesta\b/, /\binvit/,
+  /\bcuando nos\b/, /\bel sabado\b/, /\bel domingo\b/,
+  /\beste fin de semana\b/, /\bquedamos\b/,
+  /\breunion familiar\b/, /\breunion de familia\b/,
+  /\bcomo estas\b/, /\bcomo andas\b/, /\bcomo te va\b/, /\bque tal\b/,
+  /\bcomo te fue\b/, /\bcomo esta ana\b/, /\bcomo esta juanjo\b/,
+  /\btu esposa\b/, /\btu hijo\b/, /\btu familia\b/, /\btu mama\b/,
+  /\bque haces\b/, /\bque cuentas\b/, /\btanto tiempo\b/,
+];
+
+// El remitente se identifica como alguien que conoce a Pedro (y no ES
+// Pedro: "soy Pedro" ya se excluyó antes). El nombre que sigue a "soy" /
+// "me llamo" puede ser cualquiera; lo que importa es que se presente.
+// "soy de ..." (origen) y "soy un/una ..." no cuentan como presentarse.
+const SELF_ID_KNOWN_PATTERNS = [
+  /\bsoy\s+(?!de\b|un\b|una\b|el\b|la\b)\w+/,
+  /\bme llamo\s+\w+/, /\bmi nombre es\s+\w+/,
+  /\bnos conocemos\b/, /\bte acuerdas de mi\b/, /\bsoy tu amigo\b/,
+  /\bsoy tu amiga\b/, /\bsoy tu primo\b/, /\bsoy tu prima\b/,
+  /\bsoy tu tio\b/, /\bsoy tu tia\b/, /\bsoy tu hermano\b/,
+  /\bsoy tu hermana\b/, /\bsoy tu compadre\b/, /\bsoy tu comadre\b/,
+];
+
+// ¿Es un mensaje personal para Pedro? (v5.3.4)
+// Personal = dirigido a Pedro por su nombre en contexto de saludo o de
+// contenido personal, o alguien que se identifica como conocido y habla
+// de un tema personal. NUNCA se activa para intenciones claras de
+// negocio, ni para "hablar con Pedro" (eso sigue su flujo de traspaso),
+// ni para quien se presenta COMO Pedro.
+function isPersonalMessageForPeter(text, norm, st, intent) {
+  if (/\b(soy|me llamo|mi nombre es)\s+pedro\b/.test(norm)) return false;
   if (intent && ['demo', 'meeting', 'price', 'info', 'sector', 'faq', 'vendor', 'farewell', 'pedro'].includes(intent.kind)) {
-    return null;
+    // Excepción: una reunión FAMILIAR no es una reunión de negocio.
+    if (intent.kind === 'meeting' && /\breunion (familiar|de familia|con la familia)\b/.test(norm)) {
+      // sigue abajo: se evalúa como personal
+    } else {
+      return false;
+    }
   }
+  const t = ` ${norm} `;
+  const mentionsPedro = t.includes(' pedro ');
+  const greeting = /\b(hola|buenas|buenos dias|buenas tardes|buenas noches|que tal)\b/.test(norm);
+  const personalContent = PERSONAL_CONTENT_PATTERNS.some((re) => re.test(norm));
+  const selfIdKnown = SELF_ID_KNOWN_PATTERNS.some((re) => re.test(norm));
+  if (mentionsPedro && (greeting || personalContent)) return true;
+  if (selfIdKnown && personalContent) return true;
+  return false;
+}
+
+function detectPersonal(text, norm, st, intent) {
   // Si la persona se presenta COMO Pedro ("soy Pedro", "me llamo Pedro"),
   // no es un saludo A Pedro: es su nombre. No es personal.
   if (/\b(soy|me llamo|mi nombre es)\s+pedro\b/.test(norm)) return null;
 
   const t = ` ${norm} `;
   const mentionsPedro = t.includes(' pedro ');
-  const greeting = /\b(hola|buenas|buenos dias|buenas tardes|buenas noches|que tal)\b/.test(norm);
 
   // 1) Otro negocio (ej. "hola Pedro, oye me interesa comprarte unas cajas
   //    de otro negocio"): se canaliza a Pedro, sin vender Blü Bee.
   const otherBusiness = OTHER_BUSINESS_PATTERNS.some((w) => t.includes(` ${normalize(w)} `));
   if (otherBusiness && mentionsPedro) return 'other_business';
 
-  // 2) Saludo casual a Pedro ("hola Pedro, ¿cómo estás?").
-  if (mentionsPedro && greeting) return 'greeting';
+  // 2) Mensaje personal para Pedro (v5.3.4): saludo a Pedro por su nombre,
+  //    invitación, pregunta sobre su vida, o alguien que se identifica
+  //    como conocido y habla de un tema personal.
+  if (isPersonalMessageForPeter(text, norm, st, intent)) return 'personal';
 
   // 3) Mensaje social superficial, cuando ya estamos en modo personal
-  //    (después del saludo casual o de un tema personal).
+  //    (después de un mensaje personal o de otro negocio).
   if (st.personalTopic || st.personalGreeted) {
     const social = /comer|cafe|tiempo|partido|futbol|chivas|america|salir|vamos|nos vemos|que haces|como andas|como te va|que tal|saludar/.test(norm);
     if (social) return 'social';
@@ -2439,13 +2531,29 @@ function detectPersonal(text, norm, st, intent) {
 // Responde a un mensaje personal / no es de Blü Bee.
 async function handlePersonal(msg, st, text, kind) {
   const from = st.phone;
-  if (kind === 'greeting') {
-    // Primer saludo casual: respuesta breve y cálida (en nombre de Pedro,
-    // como él pidió). En el siguiente mensaje superficial, Daniela ya se
-    // presenta y lo canaliza con Pedro (caso 'social').
+  if (kind === 'personal') {
+    // (v5.3.4, corrección de Peter 2026-11-18): la respuesta al remitente
+    // NUNCA usa el nombre "Pedro" ni dice que le pasa el mensaje a Pedro:
+    // le pregunta con quién quiere contactar y le dice que canaliza su
+    // mensaje. Al mismo tiempo, el mensaje SÍ se reenvía a Pedro por el
+    // canal interno (notifyPeter), para que lo vea aunque el remitente no
+    // conteste quién busca. La notificación interna (solo la ve Pedro) sí
+    // lo identifica como destinatario. No es un lead: se guarda como
+    // recado personal, no se ofrece demo ni saludo de negocio.
+    // Si el remitente se presentó ("soy Carlos"), se guarda su nombre
+    // para que Pedro sepa quién escribió.
+    const selfName = (text.match(/\b(?:soy|me llamo|mi nombre es)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)/) || [])[1] || null;
+    if (selfName && !st.name) st.name = selfName;
+    st.personalTopic = true;
     st.personalGreeted = true;
     saveState(st);
-    await wa.sendText(from, '¡Hola! Bien, ¿y tú?');
+    await wa.sendText(from, 'Claro, ¿con quién desea contactar? Canalizo su mensaje.');
+    savePersonalRecado({ telefono: from, nombre: st.name || null, texto: text });
+    await notifyPeter(
+      '🔔 Daniela — Mensaje personal para Pedro',
+      `Mensaje personal para Pedro, de ${st.name || from} (${from}):\n"${text}"\n\nDaniela le preguntó con quién desea contactar y le dijo que canaliza su mensaje.`,
+      st
+    );
     return;
   }
   if (kind === 'other_business') {
@@ -4217,6 +4325,10 @@ module.exports = {
   // Daniela inteligente (v3)
   detectPersonal,
   handlePersonal,
+  // Mensajes personales para Pedro (v5.3.4)
+  isPersonalMessageForPeter,
+  savePersonalRecado,
+  readPersonalRecados,
   answerInfoQuestion,
   // Video de despedida personalizado (v3; fallback de identidad v3.3)
   farewellIdentity,
