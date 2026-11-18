@@ -1,9 +1,14 @@
 // Daniela — la secretaria virtual de Blü Bee Technologies.
-// Versión 5.3.5 (2026-11-18): el cierre (closeChat) ya no manda al
-// remitente el resumen de los datos capturados ("Antes de despedirme, le
-// confirmo..."). Solo se le confirma que su mensaje será canalizado y
-// los detalles solo van a Pedro por el canal interno (corrección de
-// Peter 2026-11-18, captura de pantalla).
+// Versión 5.3.6 (2026-11-18): en modo simulación, tras "Quiero hablar
+// con Pedro" Daniela ya no se queda en silencio (no hay humano que tome
+// el relevo: Peter es el prospecto). El traspaso no se marca en
+// simulación, y si ya estaba en handed_off, un mensaje nuevo lo resetea
+// y se procesa normal. En modo real, el silencio tras el traspaso sigue
+// igual.
+// (v5.3.5: el cierre (closeChat) ya no manda al remitente el resumen de
+// los datos capturados ("Antes de despedirme, le confirmo..."). Solo se
+// le confirma que su mensaje será canalizado y los detalles solo van a
+// Pedro por el canal interno — corrección de Peter 2026-11-18.)
 // (v5.3.4: mensajes personales para Pedro — los contactos antiguos
 // escriben al número de WhatsApp Business para temas personales y
 // Daniela no se los pasaba a Pedro. Ahora, si el mensaje es claramente
@@ -2964,8 +2969,19 @@ async function handleMessage(msg) {
   // Ricky, aunque haya quedado en handedOff tras pedir hablar con Pedro.
   // Para los demás, el silencio tras el traspaso sigue igual.
   if (st.handedOff && !isVipRicky(from)) {
-    await notifyPeter('Mensaje de contacto en espera', `La persona ${st.name || from} (${from}) escribió de nuevo:\n"${text}"\n\nDaniela no contestó porque ya se le pasó a Pedro.`, st);
-    return;
+    // (v5.3.6) En modo simulación no hay humano que tome el relevo: Peter
+    // es el prospecto y quedaría atrapado en silencio. Si llega aquí en
+    // simulación, se deshace el traspaso y el mensaje se procesa normal.
+    // En modo real, el silencio tras el traspaso sigue igual.
+    if (isSimulationMode(st)) {
+      st.handedOff = false;
+      st.stage = 'main';
+      saveState(st);
+      // No se retorna: el mensaje sigue su curso normal.
+    } else {
+      await notifyPeter('Mensaje de contacto en espera', `La persona ${st.name || from} (${from}) escribió de nuevo:\n"${text}"\n\nDaniela no contestó porque ya se le pasó a Pedro.`, st);
+      return;
+    }
   }
 
   // Seguridad: posible estafa o extorsión -> se retira y avisa a Pedro
@@ -3834,8 +3850,17 @@ async function handleMainIntent(msg, st, text, norm) {
         ? 'Yo le paso su recado al Sr. Ledesma.'
         : 'Claro, le paso su mensaje a la persona indicada, le atiende en cuanto pueda.');
       st.need = 'Hablar con la persona indicada';
-      st.handedOff = true;
-      st.stage = 'handed_off';
+      // (v5.3.6) En modo simulación no hay humano que tome el relevo:
+      // Peter es el prospecto. No marcar handed_off; la conversación
+      // sigue en 'main' para que pueda seguir probando. En modo real,
+      // el traspaso sigue igual.
+      if (isSimulationMode(st)) {
+        st.handedOff = false;
+        st.stage = 'main';
+      } else {
+        st.handedOff = true;
+        st.stage = 'handed_off';
+      }
       saveState(st);
       await notifyPeter(
         'Quieren hablar contigo',
