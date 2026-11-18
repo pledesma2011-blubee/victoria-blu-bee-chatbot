@@ -1,4 +1,7 @@
 // Daniela — la secretaria virtual de Blü Bee Technologies.
+// Versión 5.3.3 (2026-11-18): deduplicación por id de mensaje (wamid) —
+// Meta puede entregar el mismo mensaje dos veces y Daniela contestaba
+// dos veces; ahora la segunda entrega se ignora sin contestar.
 // Lógica de conversación: estados, intenciones, recados, seguridad y cierres.
 // Diseño v2 (2026-11-10, aprobado por Peter): conversación humana, sin menús.
 // Flujo: saludo con video → nombre+empresa → cómo dirigirse → datos de
@@ -184,6 +187,79 @@ function saveState(st) {
   st.updatedAt = new Date().toISOString();
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(path.join(STATE_DIR, `${st.phone}.json`), JSON.stringify(st, null, 2));
+}
+
+// ---------- deduplicación por id de mensaje (v5.3.3, caso real 2026-11-18) ----------
+// Meta reintenta la entrega del webhook: el mismo mensaje (mismo wamid)
+// puede llegar dos veces. Sin dedup, cada entrega corre handleMessage y
+// Daniela contesta dos veces lo mismo (caso real: Peter dijo "Hola" y
+// recibió el saludo dos veces). La guardia anti-repetición (lastReplyText)
+// NO lo evita: dos entregas concurrentes cargan el mismo estado previo y
+// las dos pasan la guardia. La única defensa es no procesar dos veces el
+// mismo id de mensaje.
+// El check-and-mark es SÍNCRONO y va al inicio de handleMessage, antes de
+// cualquier await: como Node es de un solo hilo, dos entregas concurrentes
+// no pueden colarse entre el check y el mark.
+// Se guarda en stateDir/processed-messages.json { id: timestampMs } con
+// los últimos 24 h (máx. ~1000). Sin id (llamadas viejas / pruebas) no se
+// deduplica: se procesa normal.
+const PROCESSED_MESSAGES_FILE = path.join(STATE_DIR, 'processed-messages.json');
+const PROCESSED_MESSAGES_TTL_MS = 24 * 60 * 60 * 1000; // 24 h
+const PROCESSED_MESSAGES_MAX = 1000;
+let processedMessages = null; // Map id -> timestampMs (perezoso, en memoria)
+
+function loadProcessedMessages() {
+  if (processedMessages) return processedMessages;
+  processedMessages = new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(PROCESSED_MESSAGES_FILE, 'utf8'));
+    if (raw && typeof raw === 'object') {
+      const now = Date.now();
+      for (const [id, ts] of Object.entries(raw)) {
+        if (typeof ts === 'number' && now - ts < PROCESSED_MESSAGES_TTL_MS) processedMessages.set(String(id), ts);
+      }
+    }
+  } catch { /* sin archivo o corrupto: se empieza vacío */ }
+  return processedMessages;
+}
+
+function saveProcessedMessages() {
+  try {
+    const now = Date.now();
+    const entries = [...loadProcessedMessages().entries()]
+      .filter(([, ts]) => now - ts < PROCESSED_MESSAGES_TTL_MS)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, PROCESSED_MESSAGES_MAX);
+    processedMessages = new Map(entries);
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(PROCESSED_MESSAGES_FILE, JSON.stringify(Object.fromEntries(entries), null, 2));
+  } catch (e) {
+    console.error('[DEDUP] no se pudo guardar processed-messages.json:', e.message);
+  }
+}
+
+function isDuplicateMessage(id) {
+  if (!id) return false;
+  const map = loadProcessedMessages();
+  const ts = map.get(String(id));
+  if (ts == null) return false;
+  if (Date.now() - ts >= PROCESSED_MESSAGES_TTL_MS) {
+    map.delete(String(id)); // vencido: se procesa de nuevo
+    return false;
+  }
+  return true;
+}
+
+function markMessageProcessed(id) {
+  if (!id) return;
+  loadProcessedMessages().set(String(id), Date.now());
+  saveProcessedMessages();
+}
+
+// Solo para pruebas: vacía el caché en memoria (el archivo se recarga
+// perezoso en el siguiente uso). No se usa en producción.
+function resetProcessedMessages() {
+  processedMessages = null;
 }
 
 function saveLead(lead) {
@@ -2530,6 +2606,18 @@ function isSimulationMode(st) {
 // ---------- el corazón: procesar un mensaje entrante ----------
 
 async function handleMessage(msg) {
+  // (v5.3.3) Deduplicación por id de mensaje (wamid): si Meta entrega el
+  // mismo mensaje dos veces, la segunda se ignora sin contestar nada.
+  // SÍNCRONO y antes de cualquier await: dos entregas concurrentes no
+  // pueden pasar las dos. Sin id no se deduplica (compatibilidad).
+  const msgId = msg && msg.id;
+  if (msgId) {
+    if (isDuplicateMessage(msgId)) {
+      console.log('[DEDUP] mensaje ya procesado, se ignora:', msgId, 'de', msg.from);
+      return;
+    }
+    markMessageProcessed(msgId);
+  }
   const from = msg.from;
   const st = loadState(from);
   // Una conversación cerrada que vuelve empieza de nuevo en 'main': saludo
@@ -4225,4 +4313,8 @@ module.exports = {
   maybeRunShadow,
   readShadowLog,
   shadowSummary,
+  // Deduplicación por id de mensaje (v5.3.3)
+  isDuplicateMessage,
+  markMessageProcessed,
+  resetProcessedMessages,
 };
