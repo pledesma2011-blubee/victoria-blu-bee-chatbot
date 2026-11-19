@@ -1,4 +1,9 @@
 // Daniela — la secretaria virtual de Blü Bee Technologies.
+// Versión 5.3.7 (2026-11-18): Daniela NUNCA dice "Sr. Ledesma" (ni "Pedro"
+// ni "Pedro Ledesma") a un extraño, ni siquiera cuando preguntan por
+// "Pedro Ledesma" por su nombre. La respuesta al pedir hablar con el
+// dueño es siempre: "Claro, lo canalizo al área correspondiente, le
+// responden en cuanto puedan." (corrección de Peter 2026-11-18).
 // Versión 5.3.6 (2026-11-18): en modo simulación, tras "Quiero hablar
 // con Pedro" Daniela ya no se queda en silencio (no hay humano que tome
 // el relevo: Peter es el prospecto). El traspaso no se marca en
@@ -24,11 +29,11 @@
 // Límites v2.1 (2026-11-10, aprobado por Peter): obscenidades, pruebas de IA
 // ("¿eres un robot?") y preguntas generales fuera del negocio: una
 // redirección amable y, si insisten, silencio + aviso a Pedro.
-// Regla de anonimato del CEO (2026-11-10, aprobada por Peter): Daniela NUNCA
-// dice "Pedro" a un extraño; el traspaso es a "la persona indicada" o "el
-// área correspondiente". Solo si el contacto preguntó por "Pedro Ledesma"
-// por su nombre se puede decir "Sr. Ledesma". Los avisos a Peter (internos)
-// siguen con todos los datos.
+// Regla de anonimato del CEO (2026-11-10, corregida por Peter 2026-11-18,
+// v5.3.7): Daniela NUNCA dice "Pedro", "Pedro Ledesma" ni "Sr. Ledesma" a
+// un extraño, ni siquiera cuando el contacto pregunta por "Pedro Ledesma"
+// por su nombre; el traspaso es siempre a "el área correspondiente". Los
+// avisos a Peter (internos) siguen con todos los datos.
 // "Daniela inteligente" v3 (2026-11-11, aprobado por Peter): consultora
 // ágil, no solo recepcionista. Base de conocimiento (conocimiento.js) para
 // responder preguntas de tecnología/IoT/servicios como experta; detección de
@@ -1707,7 +1712,7 @@ function brainSystemPrompt(st) {
     'Lo que hace Blü Bee Technologies: posicionamiento en interiores en tiempo real (saber dónde está una persona o un equipo dentro de un edificio, con precisión de 1 a 5 metros, con WiFi y beacons Bluetooth BlüSignal/K11); sensores LoRaWAN de temperatura, humedad y CO2 (también humedad de la tierra en viñedos); plataforma propia con mapas, tableros, alertas y business intelligence; instalación y soporte local en español. Sectores: hoteles, plazas comerciales, hospitales, aeropuertos, industria, logística, agricultura (viñedos) y corporativos. ADEMÁS, Blü Bee hace todo lo de una empresa tecnológica: chatbots y asistentes virtuales, páginas web y tiendas en línea, software y aplicaciones a la medida, sistemas CRM y administrativos (facturación, inventario, nómina), soluciones de logística y trazabilidad, Big Data y Business Intelligence, y ciberseguridad. La empresa NO tiene clientes formales todavía: los nombres de su presentación (Fibra Inn, plazas de Querétaro, un viñedo, Hospital Moscati) son prospectos, NO clientes. NUNCA digas que son clientes.',
     'Base de conocimiento (respuestas aprobadas, úsalas como verdad):\n' + knowledgeSummary(),
     'REGLAS DURAS, nunca las rompas:',
-    '1. NUNCA digas el nombre "Pedro" ni "Pedro Ledesma" a quien te escribe, SALVO que la persona con la que hablas sea Pedro (el dueño): a él sí lo llamas Pedro. Si preguntan por el dueño, di "la persona indicada". Solo si preguntan por "Pedro Ledesma" por su nombre, di "Sr. Ledesma".',
+    '1. NUNCA digas el nombre "Pedro", "Pedro Ledesma" ni "Sr. Ledesma" a quien te escribe, SALVO que la persona con la que hablas sea Pedro (el dueño): a él sí lo llamas Pedro. Si preguntan por el dueño, di "la persona indicada" o canaliza a "el área correspondiente". Nunca digas "Sr. Ledesma", ni siquiera cuando pregunten por "Pedro Ledesma" por su nombre.',
     '2. NUNCA inventes precios, costos, cotizaciones, tiempos exactos de entrega, ni nombres de clientes. Si te preguntan por precio, di que con gusto se le prepara una cotización y pídele su nombre y empresa.',
     '3. Si la pregunta NO tiene nada que ver con Blü Bee ni con tecnología empresarial (fútbol, viajes, compras personales, coqueteo, chistes, clima, noticias), NO digas que lo vas a investigar: responde exactamente "Soy Daniela, la asistente virtual de Blü Bee Technologies. Te ayudo con todo lo relacionado con nuestras soluciones de tecnología para empresas: IoT, localización en tiempo real, inteligencia de datos, chatbots y más. Para otros temas te recomiendo consultar otras herramientas. ¿En qué te puedo ayudar de Blü Bee?" Si te preguntan un dato concreto de la empresa (RFC, dirección, número de empleados, precios, fechas, clientes) y no está en tu base, NO inventes: responde exactamente "Dame un segundo, te lo investigo y te doy una respuesta lo antes posible."',
     '4. NUNCA pidas ni compartas códigos, contraseñas ni datos bancarios. Si alguien te pide eso o te ofrece algo sospechoso, retírate con amabilidad.',
@@ -3841,14 +3846,11 @@ async function handleMainIntent(msg, st, text, norm) {
     }
 
     case 'pedro': {
-      // Regla (2026-11-10, aprobada por Peter): Daniela NUNCA dice "Pedro"
-      // a un extraño. Solo si el contacto preguntó por "Pedro Ledesma" POR
-      // SU NOMBRE (ya lo conoce) se puede decir "Sr. Ledesma". Si solo
-      // dijeron "Pedro" sin apellido, o no lo mencionaron: "la persona indicada".
-      const formal = contains(text, ['pedro ledesma']);
-      await wa.sendText(from, formal
-        ? 'Yo le paso su recado al Sr. Ledesma.'
-        : 'Claro, le paso su mensaje a la persona indicada, le atiende en cuanto pueda.');
+      // Regla (2026-11-10, corregida por Peter 2026-11-18, v5.3.7): Daniela
+      // NUNCA dice "Pedro", "Pedro Ledesma" ni "Sr. Ledesma" a un extraño,
+      // ni siquiera cuando el contacto pregunta por "Pedro Ledesma" por su
+      // nombre. La respuesta es siempre la misma frase neutra.
+      await wa.sendText(from, 'Claro, lo canalizo al área correspondiente, le responden en cuanto puedan.');
       st.need = 'Hablar con la persona indicada';
       // (v5.3.6) En modo simulación no hay humano que tome el relevo:
       // Peter es el prospecto. No marcar handed_off; la conversación
